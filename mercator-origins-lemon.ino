@@ -15,6 +15,7 @@
 
 #include <M5StickCPlus.h>
 
++// rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
 
 #include <TinyGPS++.h>
