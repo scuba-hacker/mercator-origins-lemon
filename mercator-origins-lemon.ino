@@ -672,7 +672,7 @@ bool decodeUplinkMessageV1(char* uplinkMsg,const uint16_t length)
   // all ok, assign the data to globals
 
   depth = ((float)uplink_depth) / 10.0;
-  water_pressure = (float)uplink_water_pressure / 10.0;
+  water_pressure = (float)uplink_water_pressure / 100.0;
   water_temperature = (float)uplink_water_temperature / 10.0;
   enclosure_temperature = (float)uplink_enclosure_temperature / 10.0;
   enclosure_humidity = (float)uplink_enclosure_humidity / 10.0;
@@ -736,7 +736,7 @@ bool decodeUplinkMessageV2(char* uplinkMsg,const uint16_t length)
   // all ok, assign the data to globals
 
   depth = (float)uplink_depth / 10.0;
-  water_pressure = (float)uplink_water_pressure / 10.0;
+  water_pressure = (float)uplink_water_pressure / 100.0;
   water_temperature = (float)uplink_water_temperature / 10.0;
   enclosure_temperature = (float)uplink_enclosure_temperature / 10.0;
   enclosure_humidity = (float)uplink_enclosure_humidity / 10.0;
@@ -834,7 +834,7 @@ bool decodeUplinkMessageV3(char* uplinkMsg,const uint16_t length)
   // all ok, assign the data to globals
 
   depth = ((float)uplink_depth) / 10.0;
-  water_pressure = (float)uplink_water_pressure / 10.0;
+  water_pressure = (float)uplink_water_pressure / 100.0;
   water_temperature = (float)uplink_water_temperature / 10.0;
   enclosure_temperature = (float)uplink_enclosure_temperature / 10.0;
   enclosure_humidity = (float)uplink_enclosure_humidity / 10.0;
@@ -946,7 +946,7 @@ bool decodeUplinkMessageV4(char* uplinkMsg,const uint16_t length)
   // all ok, assign the data to globals
 
   depth = ((float)uplink_depth) / 10.0;
-  water_pressure = (float)uplink_water_pressure / 10.0;
+  water_pressure = (float)uplink_water_pressure / 100.0;
   water_temperature = (float)uplink_water_temperature / 10.0;
   enclosure_temperature = (float)uplink_enclosure_temperature / 10.0;
   enclosure_humidity = (float)uplink_enclosure_humidity / 10.0;
@@ -1066,7 +1066,7 @@ bool decodeUplinkMessageV5(char* uplinkMsg,const uint16_t length)
   // all ok, assign the data to globals
 
   depth = ((float)uplink_depth) / 10.0;
-  water_pressure = (float)uplink_water_pressure / 10.0;
+  water_pressure = (float)uplink_water_pressure / 100.0;
   water_temperature = (float)uplink_water_temperature / 10.0;
   enclosure_temperature = (float)uplink_enclosure_temperature / 10.0;
   enclosure_humidity = (float)uplink_enclosure_humidity / 10.0;
