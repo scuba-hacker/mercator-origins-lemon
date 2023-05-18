@@ -499,7 +499,7 @@ void loop()
         {
           // Bytes are being received but no valid location fix has been seen since startup
           // Increment byte count shown until first fix received.
-          M5.Lcd.setCursor(50, 90);
+          M5.Lcd.setCursor(50, 100);
           M5.Lcd.printf("%d",nofix_byte_loop_count++);
         }
       }
@@ -515,8 +515,7 @@ void loop()
     // No fix only shown on first acquisition. 
     M5.Lcd.setCursor(55, 5);
     M5.Lcd.setTextSize(4);
-    M5.Lcd.printf("No Fix %lu %lu\n  Lemon\n",goodUplinkMessageCount, badUplinkMessageCount);
-//    M5.Lcd.printf("No Fix\n");
+    M5.Lcd.printf("No Fix\n\n  Lemon\n");
     M5.Lcd.setCursor(110, 45);
     M5.Lcd.printf("%c",journey_activity_indicator[(++journey_activity_count)%4]);
 
@@ -537,8 +536,7 @@ void loop()
     // after first byte received, eg no bytes within 10 seconds.
     M5.Lcd.setCursor(55, 5);
     M5.Lcd.setTextSize(4);
-    M5.Lcd.printf("No GPS %lu %lu\n  Lemon\n",goodUplinkMessageCount, badUplinkMessageCount);
-//    M5.Lcd.printf("No GPS\n");
+    M5.Lcd.printf("No GPS\n\n  Lemon\n",goodUplinkMessageCount, badUplinkMessageCount);
     M5.Lcd.setCursor(110, 45);
     M5.Lcd.printf("%c",journey_activity_indicator[(++journey_activity_count)%4]);
     
