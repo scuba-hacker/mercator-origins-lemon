@@ -15,16 +15,16 @@
 
 #include <M5StickCPlus.h>
 
-+// rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
+// rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
 
 #include <TinyGPS++.h>
 
-#define SCREEN_LENGTH 240
-#define SCREEN_WIDTH 135
+const int SCREEN_LENGTH = 240;
+const int SCREEN_WIDTH = 135;
 
-#define GPS_BAUD_RATE 9600
-#define UPLINK_BAUD_RATE 9600
+const int GPS_BAUD_RATE=9600;
+const int UPLINK_BAUD_RATE=9600;
 
 #define USB_SERIAL Serial
 #define GOPRO_SERIAL Serial1
@@ -98,10 +98,9 @@ char journey_activity_indicator[]="\\|/-";
 uint32_t currentQubitroUploadAt=0,lastQubitroUploadAt=0;
 uint32_t qubitroUploadDutyCycle=0;
 
-
-#define RED_LED_GPIO 10
-#define ORANGE_LED_GPIO 0
-#define IR_LED_GPIO 9
+const uint8_t RED_LED_GPIO = 10;
+const uint8_t ORANGE_LED_GPIO = 0;
+const uint8_t IR_LED_GPIO = 9;
 
 const bool writeLogToSerial=false;
 
@@ -182,13 +181,13 @@ uint16_t qubitroMessageLength=0;
 float KB_to_Qubitro=0.0;
 float KB_from_mako=0.0;
 
-#define GROVE_GPS_RX_PIN 33
-#define GROVE_GPS_TX_PIN 32
+const uint8_t GROVE_GPS_RX_PIN=33;
+const uint8_t GROVE_GPS_TX_PIN=32;
 
-#define HAT_GPS_TX_PIN 26
-#define HAT_GPS_RX_PIN 36
+const uint8_t HAT_GPS_TX_PIN=26;
+const uint8_t HAT_GPS_RX_PIN=36;
 
-#define M5_POWER_SWITCH_PIN 255
+const uint8_t M5_POWER_SWITCH_PIN=255;
 
 Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
