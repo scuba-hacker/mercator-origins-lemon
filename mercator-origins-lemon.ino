@@ -1998,13 +1998,8 @@ void buildUplinkTelemetryMessageV5(char* payload)
 
 }
 
-
 void buildUplinkTelemetryMessageV6(char* payload)
 {
-    USB_SERIAL.println(mako_way_marker_label);  // MBJMBJ
-    USB_SERIAL.println(mako_direction_metric);
-    USB_SERIAL.println(mako_screen_display);
-    
     currentQubitroUploadAt=millis();
     qubitroUploadDutyCycle=currentQubitroUploadAt-lastQubitroUploadAt;
     uint32_t live_metrics_count = 75; // as of 9 May 20:16
