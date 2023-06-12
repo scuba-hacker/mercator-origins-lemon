@@ -1,2 +1,5 @@
 mercator_secrets.c
 *.bin
+debug.cfg
+debug_custom.json
+esp32.svd
