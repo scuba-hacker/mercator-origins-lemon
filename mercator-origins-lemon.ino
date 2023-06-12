@@ -128,7 +128,9 @@ double heading_to_target=0, distance_to_target=0;
 double journey_lat = 0,journey_lng = 0, journey_course = 0, journey_distance = 0;
 float magnetic_heading = 0,magnetic_heading_compensated=-0;
 
-uint16_t mako_screen_display=0,mako_seconds_on=0, mako_user_action=0;
+uint16_t mako_seconds_on=0, mako_user_action=0;
+char mako_screen_display[3];
+
 float mako_AXP192_temp=0, mako_usb_voltage=0,mako_usb_current=0,mako_bat_voltage=0,mako_bat_charge_current=0;
 float mako_lsm_mag_x=0,mako_lsm_mag_y=0,mako_lsm_mag_z=0, mako_lsm_acc_x=0,mako_lsm_acc_y=0,mako_lsm_acc_z=0;
 
@@ -161,7 +163,7 @@ const char* preamble_pattern="MBJAEJ";
 
 uint16_t mako_way_marker_enum;
 char mako_way_marker_label[3];
-char mako_direction_metric[2];
+char mako_direction_metric[3];
 
 uint16_t sideCount=0,topCount=0;
 vector<float> magnetometer_vector, accelerometer_vector;
@@ -748,7 +750,7 @@ bool decodeUplinkMessageV2(char* uplinkMsg,const uint16_t length)
   journey_course = (float)uplink_journey_course / 10.0;
   journey_distance = (float)uplink_journey_distance / 100.0;
 
-  mako_screen_display = 0xFFFF; // MBJ LATER
+  //mako_screen_display = 0xFFFF; // MBJ LATER
   mako_seconds_on = uplink_mako_seconds_on;
   mako_user_action = 0xFFFF;  // MBJ LATER
   mako_AXP192_temp = (float)uplink_mako_AXP192_temp / 10.0;
@@ -846,7 +848,7 @@ bool decodeUplinkMessageV3(char* uplinkMsg,const uint16_t length)
   journey_course = (float)uplink_journey_course / 10.0;
   journey_distance = (float)uplink_journey_distance / 100.0;
 
-  mako_screen_display = 0xFFFF; // MBJ LATER
+  //mako_screen_display = 0xFFFF; // MBJ LATER
   mako_seconds_on = uplink_mako_seconds_on;
   mako_user_action = 0xFFFF;  // MBJ LATER
   mako_AXP192_temp = (float)uplink_mako_AXP192_temp / 10.0;
@@ -958,7 +960,7 @@ bool decodeUplinkMessageV4(char* uplinkMsg,const uint16_t length)
   journey_course = (float)uplink_journey_course / 10.0;
   journey_distance = (float)uplink_journey_distance / 100.0;
 
-  mako_screen_display = 0xFFFF; // MBJ LATER
+//  mako_screen_display = 0xFFFF; // MBJ LATER
   mako_seconds_on = uplink_mako_seconds_on;
   mako_user_action = 0xFFFF;  // MBJ  LATER
   mako_AXP192_temp = (float)uplink_mako_AXP192_temp / 10.0;
@@ -976,13 +978,14 @@ bool decodeUplinkMessageV4(char* uplinkMsg,const uint16_t length)
   mako_lsm_acc_z = uplink_mako_lsm_acc_z;
 
   mako_way_marker_enum = uplink_mako_way_marker_enum;
-  mako_way_marker_label[0] = uplink_mako_way_marker_label & 0xFF;
+  mako_way_marker_label[0] = uplink_mako_way_marker_label & 0x00FF;
   mako_way_marker_label[1] = (uplink_mako_way_marker_label & 0xFF00)>>8;
-  mako_way_marker_label[2] = NULL;
+  mako_way_marker_label[2] = '\0';
 
-  mako_direction_metric[0] = (uplink_mako_direction_metric == 0 ? 'C' : 'M');
-  mako_direction_metric[1] = '\0';
-  
+  mako_direction_metric[0] = uplink_mako_direction_metric & 0x00FF;
+  mako_direction_metric[1] = (uplink_mako_direction_metric & 0xFF00)>>8;
+  mako_direction_metric[2] = '\0';
+      
   console_requests_send_tweet = uplink_flags & 0x01;
   console_requests_emergency_tweet = uplink_flags & 0x02;
   console_flags = uplink_flags;
@@ -1014,7 +1017,9 @@ bool decodeUplinkMessageV5(char* uplinkMsg,const uint16_t length)
   uint16_t uplink_distance_to_target = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
   uint16_t uplink_journey_course = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
   uint16_t uplink_journey_distance = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
+  
   uint16_t uplink_mako_screen_display = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
+
   uint16_t uplink_mako_seconds_on = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
   uint16_t uplink_mako_user_action = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
   uint16_t uplink_mako_AXP192_temp = *(uplinkMsg++) + ((*(uplinkMsg++))<<8);
@@ -1078,7 +1083,10 @@ bool decodeUplinkMessageV5(char* uplinkMsg,const uint16_t length)
   journey_course = (float)uplink_journey_course / 10.0;
   journey_distance = (float)uplink_journey_distance / 100.0;
 
-  mako_screen_display = 0xFFFF; // MBJ LATER
+  mako_screen_display[0] = uplink_mako_screen_display & 0x00FF;
+  mako_screen_display[1] = (uplink_mako_screen_display & 0xFF00)>>8;
+  mako_screen_display[2] = '\0';
+
   mako_seconds_on = uplink_mako_seconds_on;
   mako_user_action = 0xFFFF;  // MBJ LATER
   mako_AXP192_temp = (float)uplink_mako_AXP192_temp / 10.0;
@@ -1111,12 +1119,13 @@ bool decodeUplinkMessageV5(char* uplinkMsg,const uint16_t length)
   mako_imu_temperature = uplink_mako_imu_temperature / 10.0;
 
   mako_way_marker_enum = uplink_mako_way_marker_enum;
-  mako_way_marker_label[0] = uplink_mako_way_marker_label & 0xFF;
+  mako_way_marker_label[0] = uplink_mako_way_marker_label & 0x00FF;
   mako_way_marker_label[1] = (uplink_mako_way_marker_label & 0xFF00)>>8;
   mako_way_marker_label[2] = '\0';
 
-  mako_direction_metric[0] = (uplink_mako_direction_metric == 0 ? 'C' : 'M');
-  mako_direction_metric[1] = '\0';
+  mako_direction_metric[0] = uplink_mako_direction_metric & 0x00FF;
+  mako_direction_metric[1] = (uplink_mako_direction_metric & 0xFF00)>>8;
+  mako_direction_metric[2] = '\0';
     
   console_requests_send_tweet = uplink_flags & 0x01;
   console_requests_emergency_tweet = uplink_flags & 0x02;
@@ -1989,8 +1998,13 @@ void buildUplinkTelemetryMessageV5(char* payload)
 
 }
 
+
 void buildUplinkTelemetryMessageV6(char* payload)
 {
+    USB_SERIAL.println(mako_way_marker_label);  // MBJMBJ
+    USB_SERIAL.println(mako_direction_metric);
+    USB_SERIAL.println(mako_screen_display);
+    
     currentQubitroUploadAt=millis();
     qubitroUploadDutyCycle=currentQubitroUploadAt-lastQubitroUploadAt;
     uint32_t live_metrics_count = 75; // as of 9 May 20:16
@@ -1998,7 +2012,7 @@ void buildUplinkTelemetryMessageV6(char* payload)
           "{\"UTC_time\":\"%02d:%02d:%02d\",\"UTC_date\":\"%02d:%02d:%02d\",\"lemon_on_seconds\":%lu,\"coordinates\":[%f,%f],\"depth\":%f,"
           "\"water_pressure\":%f,\"water_temperature\":%f,\"enclosure_temperature\":%f,\"enclosure_humidity\":%f,\"enclosure_air_pressure\":%f,"
           "\"magnetic_heading_compensated\":%f,\"heading_to_target\":%f,\"distance_to_target\":%f,\"journey_course\":%f,\"journey_distance\":%f,"
-          "\"mako_screen_display\":%d,\"mako_seconds_on\":%lu,\"mako_user_action\":%d,\"mako_AXP192_temp\":%f,"
+          "\"mako_screen_display\":\"%s\",\"mako_seconds_on\":%lu,\"mako_user_action\":%d,\"mako_AXP192_temp\":%f,"
           "\"mako_usb_voltage\":%f,\"mako_usb_current\":%f,\"mako_bat_voltage\":%f,\"mako_bat_charge_current\":%f,"
           "\"fix_count\":%lu,\"lemon_usb_voltage\":%f,\"lemon_usb_current\":%f,\"lemon_bat_voltage\":%f,\"lemon_bat_current\":%f,"
           "\"sats\":%lu,\"hdop\":%f,\"gps_course\":%f,\"gps_speed_knots\":%f,"
@@ -2016,7 +2030,7 @@ void buildUplinkTelemetryMessageV6(char* payload)
           "\"lemon_imu_rot_acc_x\":%f,\"lemon_imu_rot_acc_y\":%f,\"lemon_imu_rot_acc_z\":%f,"
           "\"lemon_imu_temperature\":%f,"
                     
-          "\"mako_waymarker_e\":%d,\"mako_waymarker_label\":\"-\",\"mako_direction_metric\":\"-\","
+          "\"mako_waymarker_e\":%d,\"mako_waymarker_label\":\"%s\",\"mako_direction_metric\":\"%s\","
 
           "\"uplink_msgs_from_mako\":%lu,\"uplink_msg_length\":%hu,\"msgs_to_qubitro\":%d,\"qubitro_msg_length\":%hu,\"KB_to_qubitro\":%.1f,\"KB_uplinked_from_mako\":%.1f,"
           "\"live_metrics\":%lu,\"qubitro_upload_duty_cycle\":%lu,\"console_downlink_msg\":%lu,\"geo_location\":\"Gozo, Malta\""
@@ -2088,9 +2102,8 @@ void buildUplinkTelemetryMessageV6(char* payload)
             lemon_imu_temperature,
 
             mako_way_marker_enum,
-// DO NOT POPULATE (HARDCODED IN SPRINTF STRING)           mako_way_marker_label,
-// DO NOT POPULATE (HARDCODED IN SPRINTF STRING)          mako_direction_metric,
-
+            mako_way_marker_label,   
+            mako_direction_metric,
             goodUplinkMessageCount,
             uplinkMessageLength,
             qubitroUploadCount,
