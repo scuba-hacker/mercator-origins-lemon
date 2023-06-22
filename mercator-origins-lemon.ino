@@ -72,8 +72,12 @@ SMTPSession smtp;
 float qubitro_upload_duty_ms = 0; // disable throttling to qubitro
 uint32_t last_qubitro_upload = 0;
 
-char uplinkMessage[4096];
-char mqtt_payload[8196];
+const int16_t g_storageThrottleDutyCycle = 20; // upload once every 20 messages, or once every 10 seconds - giving 66 minutes of storage.
+int16_t g_throttledMessageCount = -1;
+bool g_offlineStorageThrottleApplied = false;
+
+const int16_t mqtt_payload_size = 2560;
+char mqtt_payload[mqtt_payload_size];
 WiFiClient wifiClient;
 QubitroMqttClient qubitro_mqttClient(wifiClient);
 bool qubitro_connect();
@@ -114,7 +118,7 @@ const uint8_t RED_LED_GPIO = 10;
 const uint8_t ORANGE_LED_GPIO = 0;
 const uint8_t IR_LED_GPIO = 9;
 
-const bool writeLogToSerial = false;
+const bool writeLogToSerial = true;
 const bool writeTelemetryLogToSerial = false; // writeLogToSerial must also be true
 
 char uplinkTestMessages[][7] = {"MSG0! ", "MSG1@ ", "MSG2@ ", "MSG3% "};
@@ -460,12 +464,16 @@ void checkConnectivity()
         {
           if (writeLogToSerial)
           {
-            USB_SERIAL.println("1.2.2 checkConnectivity: WiFi ok, ping fail, out of coverage");          
+            USB_SERIAL.println("1.2.2 checkConnectivity: WiFi ok, ping fail, out of coverage");
           }
+          
+          g_offlineStorageThrottleApplied = true;
         }
       }
       else
       {
+        g_offlineStorageThrottleApplied = true;
+        
         if (writeLogToSerial)
           USB_SERIAL.println("checkConnectivity: WIFI not connected, attempt reconnect");
 
@@ -879,11 +887,6 @@ void loop()
 
           // populate basictelemetry
 
-          //
-
-
-
-
           // construct lemon telemetry, append to the padded mako telemetry message and commit to the telemetry pipeline
           if (totalMakoAndLemonLength <= blockMaxPayload)
           {
@@ -901,11 +904,45 @@ void loop()
               USB_SERIAL.printf("totalMakoAndLemonLength %hu\n",totalMakoAndLemonLength);
 
             headBlock.setPayloadSize(totalMakoAndLemonLength);
-            bool isPipelineFull=false;
-            telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
 
-            if (writeLogToSerial)
-              USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+            bool allowCommitOfHead = false;
+            
+            if (g_offlineStorageThrottleApplied)
+            {
+              if (g_throttledMessageCount == -1)
+              {
+                 g_throttledMessageCount = g_storageThrottleDutyCycle;
+              }
+              else if (g_throttledMessageCount > 0)
+              {
+                g_throttledMessageCount--;
+              }
+              else
+              {
+                g_throttledMessageCount=-1;
+                allowCommitOfHead = true;
+              }
+            }
+            else
+            {
+              g_throttledMessageCount=-1;
+              allowCommitOfHead = true;
+            }
+            
+            // do not commit head block, message storage is throttled due to no internet connection
+            if (allowCommitOfHead)
+            {
+              bool isPipelineFull=false;
+              telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
+            
+              if (writeLogToSerial)
+                USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+            }
+            else
+            {
+              if (writeLogToSerial)
+                USB_SERIAL.printf("No Commit head block: THROTTLED (%i of %i)- TH=%hu,%hu\n", g_storageThrottleDutyCycle - g_throttledMessageCount, g_storageThrottleDutyCycle,telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+            }
           }
           else
           {
@@ -951,6 +988,9 @@ void loop()
             if (uploadStatus & 0x01 == Q_SUCCESS)
             {
               telemetryPipeline.tailBlockCommitted();
+              
+              g_offlineStorageThrottleApplied = false;
+              
               if (writeLogToSerial)
               {
                 USB_SERIAL.printf("tail block committed:  pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
