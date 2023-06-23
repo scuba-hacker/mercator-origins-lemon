@@ -3,3 +3,4 @@ mercator_secrets.c
 debug.cfg
 debug_custom.json
 esp32.svd
+build/*.*
