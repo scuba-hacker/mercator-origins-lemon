@@ -43,7 +43,6 @@ const bool enableConnectToTwitter = false;
 const bool enableConnectToSMTP = false;
 
 uint32_t consoleDownlinkMsgCount = 0;
-const uint32_t consoleDownlinkMsgDutyCycle = 4;
 
 #ifdef ENABLE_TWITTER_AT_COMPILE_TIME
 // see mercator_secrets.c for Twitter login credentials
@@ -118,7 +117,7 @@ const uint8_t RED_LED_GPIO = 10;
 const uint8_t ORANGE_LED_GPIO = 0;
 const uint8_t IR_LED_GPIO = 9;
 
-const bool writeLogToSerial = true;
+const bool writeLogToSerial = false;
 const bool writeTelemetryLogToSerial = false; // writeLogToSerial must also be true
 
 char uplinkTestMessages[][7] = {"MSG0! ", "MSG1@ ", "MSG2@ ", "MSG3% "};
@@ -592,6 +591,82 @@ void setup()
 #endif
 }
 
+char* customiseSentence(char* sentence)
+{
+  // A temporary hack to infiltrate internet upload status into
+  // the byte that is normally fixed at M representing Metres units
+  // for difference between sea level and geoid. Have to also correct checksum.
+  char* next=sentence;
+
+  char override = '\0';
+
+  if (telemetryPipeline.getPipelineLength() > 2)
+  {
+     override = 'N';
+  }
+
+  if (override)
+  {
+    while (*next++ != '$');
+  
+    next+=2;
+  
+    // sentences: GPGGA or GNGGA - search for 12th comma
+    if (*next++ == 'G' && *next++ == 'G' && *next++ == 'A')
+    {
+      char priorVal = 0, newVal = 0;
+      
+      uint8_t commas=0;
+      while (*next)
+      {
+        if (*next++ == ',')
+        {
+          commas++;
+  
+          if (commas == 12)
+          {
+            // next char change to be indicative of upload to internet status
+            if (telemetryPipeline.getPipelineLength() > 2)
+            {
+              // overwrite the character in the sentence which is normally 'M'
+              priorVal = *next;
+              newVal = *next = override;
+            }
+            else
+            {
+              break;
+            }
+          }
+        }
+
+        // correct the checksum by xoring itself with old value and new value
+        // and storing back in same place in sentence.
+        if (*next == '*')
+        {
+          next++;
+          
+          // following two bytes are checksum in hex
+          uint8_t checksum_byte_1 = (uint8_t)(*next++);
+          uint8_t checksum_byte_2 = (uint8_t)(*next--);
+  
+          uint8_t checksum = (checksum_byte_1 >= 'A' ? checksum_byte_1 - 'A' + 10 : checksum_byte_1) * 16;
+          checksum += (checksum_byte_2 >= 'A' ? checksum_byte_2 - 'A' + 10 : checksum_byte_2);
+  
+          checksum = checksum ^ priorVal ^ newVal;
+  
+          uint8_t msn = ((checksum & 0xF0) >> 4);
+          uint8_t lsn = ((checksum & 0x0F));
+  
+          *next++ = (msn > 9 ? 'A' + msn - 10 : '0' + msn);
+          *next++ = (lsn > 9 ? 'A' + lsn - 10 : '0' + lsn);
+        }
+      }
+    }
+  }
+  
+  return sentence;
+}
+
 void loop()
 {
   shutdownIfUSBPowerOff();
@@ -632,27 +707,20 @@ void loop()
       // Must extract longitude and latitude for the updated flag to be set on next location update.
       if (gps.location.isValid() && gps.location.isUpdated())
       {
-//        if (writeLogToSerial)
-//        {
-//          // only writes GNGGA and GNRMC messages
-//          USB_SERIAL.printf("Received from GPS: %s", gps.getSentence());
-//        }
-
         // only enter here on GPRMC and GPGGA msgs with M5 GPS unit, 0.5 sec between each message.
         // 1 second between updates on the same message type.
 
         //////////////////////////////////////////////////////////
         // send message to outgoing serial connection to gopro
-        //        if (consoleDownlinkMsgCount % consoleDownlinkMsgDutyCycle == 0)
-        {
-          GOPRO_SERIAL.write(gps.getSentence());
-          consoleDownlinkMsgCount++;
-//          if (writeLogToSerial)
-//          {
-//            USB_SERIAL.printf("\nSend to Mako: %s", gps.getSentence());
-//          }
-        }
+        GOPRO_SERIAL.write(customiseSentence(gps.getSentence()));
+        consoleDownlinkMsgCount++;
         //////////////////////////////////////////////////////////
+
+//        if (writeLogToSerial)
+//       {
+//          // only writes GNGGA and GNRMC messages
+//          USB_SERIAL.printf("Received from GPS: %s", gps.getSentence());
+//        }
 
         newFixReceived = true;
 
