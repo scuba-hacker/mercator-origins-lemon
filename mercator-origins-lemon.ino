@@ -8,6 +8,7 @@
 
 // compilation switches
 
+//#define ENABLE_CASIC_MESSAGES_AT_COMPILE_TIME
 //#define ENABLE_TWITTER_AT_COMPILE_TIME
 //#define ENABLE_SMTP_AT_COMPILE_TIME
 #define ENABLE_QUBITRO_AT_COMPILE_TIME
@@ -108,7 +109,7 @@ uint32_t passedChecksumCount = 0;
 bool newFixReceived = false;
 
 uint8_t journey_activity_count = 0;
-char journey_activity_indicator[] = "\\|/-";
+const char* journey_activity_indicator = "\\|/-";
 
 uint32_t currentQubitroUploadAt = 0, lastQubitroUploadAt = 0;
 uint32_t qubitroUploadDutyCycle = 0;
@@ -119,8 +120,6 @@ const uint8_t IR_LED_GPIO = 9;
 
 const bool writeLogToSerial = false;
 const bool writeTelemetryLogToSerial = false; // writeLogToSerial must also be true
-
-char uplinkTestMessages[][7] = {"MSG0! ", "MSG1@ ", "MSG2@ ", "MSG3% "};
 
 TinyGPSPlus gps;
 int uart_number_gps = 2;
@@ -399,17 +398,20 @@ void getM5ImuSensorData(struct LemonTelemetryForJson& t)
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  Serial.printf("***** Connected to %s successfully! *****\n",info.wifi_sta_connected.ssid);
+  if (writeLogToSerial)
+    USB_SERIAL.printf("***** Connected to %s successfully! *****\n",info.wifi_sta_connected.ssid);
 }
 
 void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  Serial.printf("***** WiFi CONNECTED IP: %s ******\n",WiFi.localIP().toString());
+  if (writeLogToSerial)
+    USB_SERIAL.printf("***** WiFi CONNECTED IP: %s ******\n",WiFi.localIP().toString());
 }
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  Serial.printf("***** WiFi DISCONNECTED: Reason: %d ******\n",info.wifi_sta_disconnected.reason);
+  if (writeLogToSerial)
+    USB_SERIAL.printf("***** WiFi DISCONNECTED: Reason: %d ******\n",info.wifi_sta_disconnected.reason);
   // Reason 2 
   // Reason 201
 }
@@ -592,12 +594,14 @@ void setup()
 }
 
 char* customiseSentence(char* sentence)
-{
+{  
   // A temporary hack to infiltrate internet upload status into
   // the byte that is normally fixed at M representing Metres units
   // for difference between sea level and geoid. Have to also correct checksum.
+  const uint32_t padding = 8;
   char* next=sentence;
-
+  char* end=sentence+strlen(sentence)-padding;
+  
   char override = '\0';
 
   if (telemetryPipeline.getPipelineLength() > 2)
@@ -607,7 +611,10 @@ char* customiseSentence(char* sentence)
 
   if (override)
   {
-    while (*next++ != '$');
+    while (*next++ != '$' && next < end);
+
+    if (next == end)
+      return sentence;
   
     next+=2;
   
@@ -617,7 +624,7 @@ char* customiseSentence(char* sentence)
       char priorVal = 0, newVal = 0;
       
       uint8_t commas=0;
-      while (*next)
+      while (*next && next < end)
       {
         if (*next++ == ',')
         {
@@ -801,7 +808,7 @@ void loop()
     // swimming pool like new malden or putney there may be no gps signal so
     // won't be able to test the rest, eg compass, temperature, humidity, buttons, reed switches
     // note the leak sensor is active at all times in the gopro M5.
-    sendFakeGPSData1();
+    sendFakeGPSData_No_Fix();
 
     delay(250); // no fix wait
   }
@@ -822,7 +829,7 @@ void loop()
     // swimming pool like new malden or putney there may be no gps signal so
     // won't be able to test the rest, eg compass, temperature, humidity, buttons, reed switches
     // note the leak sensor is active at all times in the gopro M5.
-    sendFakeGPSData2();
+    sendFakeGPSData_No_GPS();
 
     delay(250); // no fix wait
   }
@@ -1334,213 +1341,22 @@ uint16_t calcUplinkChecksum(char* buffer, uint16_t length)
   return checksum;
 }
 
-void sendFakeGPSData1()
+const char* fake_no_fix = "$GPRMC,235316.000,A,4003.9040,N,10512.5792,W,0.09,144.75,141112,,*19\n";
+
+void sendFakeGPSData_No_Fix()
 {
-  char fake1[] = "$GPRMC,235316.000,A,4003.9040,N,10512.5792,W,0.09,144.75,141112,,*19\n";
-  GOPRO_SERIAL.write(fake1);
+  GOPRO_SERIAL.write(fake_no_fix);
   delay(100);
 }
 
-void sendFakeGPSData2()
+const char* fake_no_gps = "$GPRMC,092204.999,A,4250.5589,S,14718.5084,E,0.00,89.68,211200,,*25\n";
+
+void sendFakeGPSData_No_GPS()
 {
-  char fake1[] = "$GPRMC,092204.999,A,4250.5589,S,14718.5084,E,0.00,89.68,211200,,*25\n";
-  GOPRO_SERIAL.write(fake1);
+  GOPRO_SERIAL.write(fake_no_gps);
   delay(100);
 }
 
-
-///// GPS MESSAGE QUERY/SET
-
-void sendCAS06QueryMessages()
-{
-  /*
-
-    Query the information type of the product. Refer to 1.5.8 for information content.
-    0=Query firmware version number
-    1=Query the hardware model and serial number
-    2=Query the working mode of the multimode receiver MO=GB means dual mode of GPS+BDS
-    3=Query the customer number of the product
-    5=Query upgrade code information
-  */
-
-  // these are sent CAS026 messages and they work using grove port and HAT pins
-  gps_serial.write("$PCAS06,0*1B\r\n");   // response: $GPTXT,01,01,02,SW=URANUS5,V5.3.0.0*1D
-  //    gps_serial.write("$PCAS06,1*1A\r\n");   // response: $GPTXT,01,01,02,HW=ATGM336H,0001010379462*1F  (chip model ATGM336H)
-  //    gps_serial.write("$PCAS06,2*19\r\n");   // response: $GPTXT,01,01,02,MO=GB*77
-  //    gps_serial.write("$PCAS06,3*18\r\n");   // response: $GPTXT,01,01,02,CI=01B94154*04
-  //    gps_serial.write("$PCAS06,5*1E\r\n");   // response: $GPTXT,01,01,02,BS=SOC_BootLoader,V6.2.0.2*34
-}
-
-
-void sendCAS02LocationUpdateRateMessages()
-{
-  /*
-     1000 = update rate 1Hz, output per second 1
-     500 = update rate 2Hz, output per second 2
-     250 = update rate 4Hz, output per second 4
-     200 = update rate 5Hz, output per second 5
-     100 = update rate 10Hz, output per second 10
-
-  */
-  gps_serial.write("$PCAS02,1000*2E\r\n");   // set to 1Hz response:
-  //    gps_serial.write("$PCAS02,500*1A\r\n");   // set to 2Hz response:
-  //    gps_serial.write("$PCAS02,100*1E\r\n");   // set to 10Hz response:
-}
-
-void SendCASICNavXQuery()
-{
-  unsigned char NavXQuery[] = {0xBA, 0xCE, 0x00, 0x00, 0x06, 0x07, 0x00, 0x00, 0x06, 0x07};
-
-  gps_serial.write(NavXQuery, sizeof(NavXQuery));
-}
-
-void SendCASICNavXWalkingDynamicModel(const bool setWalking)
-{
-  uint8_t d = (setWalking ? 2 : 0); // walking mode dynModel is 2, default is 0 (portable)
-
-  uint8_t dynModelOffset = 4;
-  uint8_t preamble[] = {0xBA, 0xCE, 0x2c, 0x00, 0x06, 0x07};
-  uint8_t payload[] = {0, 0, 0, 1, 255, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                       0, 0, 0, 0
-                      };    // 44 bytes of payload
-
-  payload[dynModelOffset] = d;
-
-  uint32_t checksum = (preamble[2] << 24) + (preamble[3] << 16) + sizeof(payload);
-  for (int i = 0; i < sizeof(payload); i = i + 4)
-    checksum = checksum + *((uint32_t*)(payload + i));
-
-  gps_serial.write(preamble, sizeof(preamble));
-  gps_serial.write(payload, sizeof(payload));
-  gps_serial.write((uint8_t)(checksum & 0xFF));
-  gps_serial.write((uint8_t)(checksum >> 8 & 0xFF));
-  gps_serial.write((uint8_t)(checksum >> 16 & 0xFF));
-  gps_serial.write((uint8_t)(checksum >> 24 & 0xFF));
-
-  // TOMORROW: need to find out if the checksum calculation is correct comparing to the Nav response and the ACK-ACK msg.
-  // BEFORE SENDING ANY SET COMMANDS
-}
-
-void waitForCASICNavXResponse()
-{
-  USB_SERIAL.println("Waiting for Navx Response Ok");
-
-  uint8_t payloadLength = 44;
-  uint8_t payload[payloadLength];
-
-  uint8_t checksumLength = 4;
-  uint8_t checksum[checksumLength];
-
-  // length 44 == 0x002C
-
-  uint8_t searchCriteria[] = {0xBA, 0xCE, 0x2C, 0x00, 0x06, 0x07};
-  uint8_t criteriaCount = sizeof(searchCriteria);
-  uint8_t next = 0;
-
-  while (next < criteriaCount)
-  {
-    if (gps_serial.available())
-      next = ((gps_serial.read() == searchCriteria[next]) ? next + 1 : 0);
-  }
-  USB_SERIAL.println("found all Navx Response preamble bytes");
-
-  uint8_t nextPayload = 0;
-  while (nextPayload < payloadLength)
-  {
-    if (gps_serial.available())
-    {
-      payload[nextPayload] = gps_serial.read();
-      nextPayload++;
-    }
-  }
-  USB_SERIAL.printf("read all payload bytes\n");
-
-  uint8_t nextChecksumByte = 0;
-  while (nextChecksumByte < checksumLength)
-  {
-    if (gps_serial.available())
-      checksum[nextChecksumByte++] = gps_serial.read();
-  }
-  USB_SERIAL.printf("read all checksum bytes\n");
-
-  // Verify checksum
-  // LATER
-
-  // What is in the payload?
-  uint8_t mask0 = payload[3]; // MSB
-  uint8_t mask1 = payload[2];
-  uint8_t mask2 = payload[1];
-  uint8_t mask3 = payload[0]; // LSB
-  uint8_t dynamicModel = payload[4];
-  uint8_t fixMode = payload[5];
-  uint8_t minimumNumberofSatellites = payload[6];
-  uint8_t maximumNumberofSatellites = payload[7];
-  uint8_t minCNO = payload[8];
-  uint8_t iniFix3D = payload[10];
-  int8_t minElev = payload[11];
-
-  USB_SERIAL.printf("mask0: %x mask1: %x mask2: %x mask3: %x\n", mask0, mask1, mask2, mask3);
-  USB_SERIAL.printf("dyModel: %i  fixMode: %i  minSat: %i  maxSat: %i\n", dynamicModel, fixMode, minimumNumberofSatellites, maximumNumberofSatellites);
-  USB_SERIAL.printf("minCNO: %i  iniFix3D: %i  minElev: %i\n", minCNO, iniFix3D, minElev);
-}
-
-
-void waitForCASICACKResponse()
-{
-  while (true)
-  {
-    if (gps_serial.available())
-    {
-      char nextByte = gps_serial.read();
-      if (nextByte == 0x05)
-      {
-        nextByte = gps_serial.read();
-        if (nextByte == 0x01)
-        {
-          USB_SERIAL.println("ACK-ACK Received");
-          // format: 0xBA 0xCE 0x00 0x04 0x05 0x01 <class> <msgid> <reserve0> <reserve1> <4 checksum bytes>
-          // class = type of information received correctly - unsigned char
-          // msgid = number of correctly received message - unsigned char
-          // reserve 0 and reserve1 = two bytes containing an unsigned short int
-
-          // throw away next 8 bytes
-          int i = 8;
-          while (i)
-          {
-            if (gps_serial.available())
-            {
-              gps_serial.read();
-              i--;
-            }
-          }
-        }
-        else if (nextByte == 0x00)
-        {
-          USB_SERIAL.println("ACK-NACK Received");
-          // format: 0xBA 0xCE 0x00 0x04 0x05 0x00 <class> <msgid> <reserve0> <reserve1> <4 checksum bytes>
-          // class = Type of information not received correctly - unsigned char
-          // msgid = Number of incorrectly received messages - unsigned char
-          // reserve0 and reserve1 = two bytes containing an unsigned short int
-          // throw away next 8 bytes
-          int i = 8;
-          while (i)
-          {
-            if (gps_serial.available())
-            {
-              gps_serial.read();
-              i--;
-            }
-          }
-        }
-
-        break;
-      }
-    }
-  }
-}
 
 void toggleOTAActive()
 {
@@ -1827,7 +1643,6 @@ bool setupOTAWebServer(const char* _ssid, const char* _password, const char* lab
 #ifdef ENABLE_QUBITRO_AT_COMPILE_TIME
 bool qubitro_connect()
 {
-
   bool success = true;
 
   if (enableConnectToQubitro && WiFi.status() == WL_CONNECTED)
@@ -1836,18 +1651,23 @@ bool qubitro_connect()
     qubitro_mqttClient.setDeviceIdToken(qubitro_device_id, qubitro_device_token);
     qubitro_mqttClient.setConnectionTimeout(qubitro_connection_timeout_ms);
 
-    USB_SERIAL.println("Connecting to Qubitro...");
+    if (writeLogToSerial)
+      USB_SERIAL.println("Connecting to Qubitro...");
 
     if (!qubitro_mqttClient.connect(qubitro_host, qubitro_port))
     {
-      USB_SERIAL.print("Connection failed. Error code: ");
-      USB_SERIAL.println(qubitro_mqttClient.connectError());
-      USB_SERIAL.println("Visit docs.qubitro.com or create a new issue on github.com/qubitro");
+      if (writeLogToSerial)
+      {
+        USB_SERIAL.print("Connection failed. Error code: ");
+        USB_SERIAL.println(qubitro_mqttClient.connectError());
+        USB_SERIAL.println("Visit docs.qubitro.com or create a new issue on github.com/qubitro");
+      }
       success = false;
     }
     else
     {
-      USB_SERIAL.println("Connected to Qubitro.");
+      if (writeLogToSerial)
+        USB_SERIAL.println("Connected to Qubitro.");
       qubitro_mqttClient.subscribe(qubitro_device_id);
     }
   }
@@ -2028,7 +1848,8 @@ void sendTestByEmail()
 
   if (!smtp.connect(&session))
   {
-    USB_SERIAL.println("Error connecting to SMTP, " + smtp.errorReason());
+    if (writeLogToSerial)
+      USB_SERIAL.println("Error connecting to SMTP, " + smtp.errorReason());
     return;
   }
 
@@ -2047,7 +1868,10 @@ void sendTestByEmail()
   emailMessage.html.transfer_encoding = Content_Transfer_Encoding::enc_7bit;
 
   if (!MailClient.sendMail(&smtp, &emailMessage))
-    USB_SERIAL.println("Error sending Email, " + smtp.errorReason());
+  {
+    if (writeLogToSerial)
+      USB_SERIAL.println("Error sending Email, " + smtp.errorReason());
+  }
 }
 
 void sendLocationByEmail()
@@ -2062,12 +1886,14 @@ void sendLocationByEmail()
 
   if (!smtp.connect(&session))
   {
-    USB_SERIAL.println("Error connecting to SMTP, " + smtp.errorReason());
+    if (writeLogToSerial)
+      USB_SERIAL.println("Error connecting to SMTP, " + smtp.errorReason());
     return;
   }
   else
   {
-    USB_SERIAL.println("Connected to SMTP Ok");
+    if (writeLogToSerial)
+      USB_SERIAL.println("Connected to SMTP Ok");
   }
   SMTP_Message emailMessage;
 
@@ -2083,7 +1909,7 @@ void sendLocationByEmail()
   emailMessage.text.charSet = "us-ascii";
   emailMessage.html.transfer_encoding = Content_Transfer_Encoding::enc_7bit;
 
-  if (!MailClient.sendMail(&smtp, &emailMessage))
+  if (!MailClient.sendMail(&smtp, &emailMessage) && writeLogToSerial)
     USB_SERIAL.println("Error sending Email, " + smtp.errorReason());
   else
     USB_SERIAL.println("Error sending Email, " + smtp.errorReason());
@@ -2137,10 +1963,13 @@ bool sendOriginsTweet(char* tweet)
 
     success = twitter.sendTweet(tweet);
 
-    if (success)
-      USB_SERIAL.printf("Twitter send tweet successful: %s", tweet);
-    else
-      USB_SERIAL.printf("Twitter send tweet failed: %s", tweet);
+    if (writeLogToSerial)
+    {  
+      if (success)
+        USB_SERIAL.printf("Twitter send tweet successful: %s", tweet);
+      else
+        USB_SERIAL.printf("Twitter send tweet failed: %s", tweet);
+    }
   }
   return success;
 }
@@ -2163,7 +1992,7 @@ void sendAnyTwitterMessagesRequired()
 
 
 ///// GPS MESSAGE QUERY/SET
-
+#ifdef ENABLE_CASIC_MESSAGES_AT_COMPILE_TIME
 void sendCAS06QueryMessages(HardwareSerial &serial)
 {
   /*
@@ -2183,7 +2012,6 @@ void sendCAS06QueryMessages(HardwareSerial &serial)
   //    serial.write("$PCAS06,3*18\r\n");   // response: $GPTXT,01,01,02,CI=01B94154*04
   //    serial.write("$PCAS06,5*1E\r\n");   // response: $GPTXT,01,01,02,BS=SOC_BootLoader,V6.2.0.2*34
 }
-
 
 void sendCAS02LocationUpdateRateMessages(HardwareSerial &serial)
 {
@@ -2354,3 +2182,196 @@ void waitForCASICACKResponse(HardwareSerial &serial)
     }
   }
 }
+
+
+void sendCAS06QueryMessages()
+{
+  /*
+
+    Query the information type of the product. Refer to 1.5.8 for information content.
+    0=Query firmware version number
+    1=Query the hardware model and serial number
+    2=Query the working mode of the multimode receiver MO=GB means dual mode of GPS+BDS
+    3=Query the customer number of the product
+    5=Query upgrade code information
+  */
+
+  // these are sent CAS026 messages and they work using grove port and HAT pins
+  gps_serial.write("$PCAS06,0*1B\r\n");   // response: $GPTXT,01,01,02,SW=URANUS5,V5.3.0.0*1D
+  //    gps_serial.write("$PCAS06,1*1A\r\n");   // response: $GPTXT,01,01,02,HW=ATGM336H,0001010379462*1F  (chip model ATGM336H)
+  //    gps_serial.write("$PCAS06,2*19\r\n");   // response: $GPTXT,01,01,02,MO=GB*77
+  //    gps_serial.write("$PCAS06,3*18\r\n");   // response: $GPTXT,01,01,02,CI=01B94154*04
+  //    gps_serial.write("$PCAS06,5*1E\r\n");   // response: $GPTXT,01,01,02,BS=SOC_BootLoader,V6.2.0.2*34
+}
+
+
+void sendCAS02LocationUpdateRateMessages()
+{
+  /*
+     1000 = update rate 1Hz, output per second 1
+     500 = update rate 2Hz, output per second 2
+     250 = update rate 4Hz, output per second 4
+     200 = update rate 5Hz, output per second 5
+     100 = update rate 10Hz, output per second 10
+
+  */
+  gps_serial.write("$PCAS02,1000*2E\r\n");   // set to 1Hz response:
+  //    gps_serial.write("$PCAS02,500*1A\r\n");   // set to 2Hz response:
+  //    gps_serial.write("$PCAS02,100*1E\r\n");   // set to 10Hz response:
+}
+
+void SendCASICNavXQuery()
+{
+  unsigned char NavXQuery[] = {0xBA, 0xCE, 0x00, 0x00, 0x06, 0x07, 0x00, 0x00, 0x06, 0x07};
+
+  gps_serial.write(NavXQuery, sizeof(NavXQuery));
+}
+
+void SendCASICNavXWalkingDynamicModel(const bool setWalking)
+{
+  uint8_t d = (setWalking ? 2 : 0); // walking mode dynModel is 2, default is 0 (portable)
+
+  uint8_t dynModelOffset = 4;
+  uint8_t preamble[] = {0xBA, 0xCE, 0x2c, 0x00, 0x06, 0x07};
+  uint8_t payload[] = {0, 0, 0, 1, 255, 0, 0, 0, 0, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                       0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                       0, 0, 0, 0
+                      };    // 44 bytes of payload
+
+  payload[dynModelOffset] = d;
+
+  uint32_t checksum = (preamble[2] << 24) + (preamble[3] << 16) + sizeof(payload);
+  for (int i = 0; i < sizeof(payload); i = i + 4)
+    checksum = checksum + *((uint32_t*)(payload + i));
+
+  gps_serial.write(preamble, sizeof(preamble));
+  gps_serial.write(payload, sizeof(payload));
+  gps_serial.write((uint8_t)(checksum & 0xFF));
+  gps_serial.write((uint8_t)(checksum >> 8 & 0xFF));
+  gps_serial.write((uint8_t)(checksum >> 16 & 0xFF));
+  gps_serial.write((uint8_t)(checksum >> 24 & 0xFF));
+
+  // TOMORROW: need to find out if the checksum calculation is correct comparing to the Nav response and the ACK-ACK msg.
+  // BEFORE SENDING ANY SET COMMANDS
+}
+
+void waitForCASICNavXResponse()
+{
+  USB_SERIAL.println("Waiting for Navx Response Ok");
+
+  uint8_t payloadLength = 44;
+  uint8_t payload[payloadLength];
+
+  uint8_t checksumLength = 4;
+  uint8_t checksum[checksumLength];
+
+  // length 44 == 0x002C
+
+  uint8_t searchCriteria[] = {0xBA, 0xCE, 0x2C, 0x00, 0x06, 0x07};
+  uint8_t criteriaCount = sizeof(searchCriteria);
+  uint8_t next = 0;
+
+  while (next < criteriaCount)
+  {
+    if (gps_serial.available())
+      next = ((gps_serial.read() == searchCriteria[next]) ? next + 1 : 0);
+  }
+  USB_SERIAL.println("found all Navx Response preamble bytes");
+
+  uint8_t nextPayload = 0;
+  while (nextPayload < payloadLength)
+  {
+    if (gps_serial.available())
+    {
+      payload[nextPayload] = gps_serial.read();
+      nextPayload++;
+    }
+  }
+  USB_SERIAL.printf("read all payload bytes\n");
+
+  uint8_t nextChecksumByte = 0;
+  while (nextChecksumByte < checksumLength)
+  {
+    if (gps_serial.available())
+      checksum[nextChecksumByte++] = gps_serial.read();
+  }
+  USB_SERIAL.printf("read all checksum bytes\n");
+
+  // Verify checksum
+  // LATER
+
+  // What is in the payload?
+  uint8_t mask0 = payload[3]; // MSB
+  uint8_t mask1 = payload[2];
+  uint8_t mask2 = payload[1];
+  uint8_t mask3 = payload[0]; // LSB
+  uint8_t dynamicModel = payload[4];
+  uint8_t fixMode = payload[5];
+  uint8_t minimumNumberofSatellites = payload[6];
+  uint8_t maximumNumberofSatellites = payload[7];
+  uint8_t minCNO = payload[8];
+  uint8_t iniFix3D = payload[10];
+  int8_t minElev = payload[11];
+
+  USB_SERIAL.printf("mask0: %x mask1: %x mask2: %x mask3: %x\n", mask0, mask1, mask2, mask3);
+  USB_SERIAL.printf("dyModel: %i  fixMode: %i  minSat: %i  maxSat: %i\n", dynamicModel, fixMode, minimumNumberofSatellites, maximumNumberofSatellites);
+  USB_SERIAL.printf("minCNO: %i  iniFix3D: %i  minElev: %i\n", minCNO, iniFix3D, minElev);
+}
+
+
+void waitForCASICACKResponse()
+{
+  while (true)
+  {
+    if (gps_serial.available())
+    {
+      char nextByte = gps_serial.read();
+      if (nextByte == 0x05)
+      {
+        nextByte = gps_serial.read();
+        if (nextByte == 0x01)
+        {
+          USB_SERIAL.println("ACK-ACK Received");
+          // format: 0xBA 0xCE 0x00 0x04 0x05 0x01 <class> <msgid> <reserve0> <reserve1> <4 checksum bytes>
+          // class = type of information received correctly - unsigned char
+          // msgid = number of correctly received message - unsigned char
+          // reserve 0 and reserve1 = two bytes containing an unsigned short int
+
+          // throw away next 8 bytes
+          int i = 8;
+          while (i)
+          {
+            if (gps_serial.available())
+            {
+              gps_serial.read();
+              i--;
+            }
+          }
+        }
+        else if (nextByte == 0x00)
+        {
+          USB_SERIAL.println("ACK-NACK Received");
+          // format: 0xBA 0xCE 0x00 0x04 0x05 0x00 <class> <msgid> <reserve0> <reserve1> <4 checksum bytes>
+          // class = Type of information not received correctly - unsigned char
+          // msgid = Number of incorrectly received messages - unsigned char
+          // reserve0 and reserve1 = two bytes containing an unsigned short int
+          // throw away next 8 bytes
+          int i = 8;
+          while (i)
+          {
+            if (gps_serial.available())
+            {
+              gps_serial.read();
+              i--;
+            }
+          }
+        }
+
+        break;
+      }
+    }
+  }
+}
+#endif COMPILE_CASIC_MESSAGES
