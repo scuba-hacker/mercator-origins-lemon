@@ -19,11 +19,15 @@ static const char* ping_target = "8.8.8.8";    // google DNS
 
 static const char* qubitro_host = "";
 static const int   qubitro_port = 1883;	// 1883 (dev) or 8883 (prod)
-static const char* qubitro_username = "";
-static const char* qubitro_password = "";
-static const char* qubitro_client_id = "";  
-static const char* qubitro_device_id = "";
-static const char* qubitro_device_token = "";
+static const char* qubitro_username_1 = "";
+static const char* qubitro_password_1 = "";
+static const char* qubitro_device_id_1 = "";
+static const char* qubitro_device_token_1 = "";
+
+static const char* qubitro_username_2 = "";
+static const char* qubitro_password_2 = "";
+static const char* qubitro_device_id_2 = "";
+static const char* qubitro_device_token_2 = "";
 
 static const char* smtpServer = "";
 static const int   smtpPort = 465;		// depends upon smtp protocol used by your isp

@@ -69,6 +69,14 @@ SMTPSession smtp;
 #include <WiFi.h>
 #include <ESP32Ping.h>
 #include <QubitroMqttClient.h>
+
+const bool usePrimaryQubitroUserDevice = true;
+
+const char* qubitro_username = NULL;
+const char* qubitro_password = NULL;
+const char* qubitro_device_id = NULL;
+const char* qubitro_device_token = NULL;
+
 float qubitro_upload_duty_ms = 0; // disable throttling to qubitro
 uint32_t last_qubitro_upload = 0;
 
@@ -237,6 +245,8 @@ void updateButtonsAndBuzzer()
   p_secondButton->read();
   M5.Beep.update();
 }
+
+const uint16_t makoHardcodedUplinkMessageLength = 114;
 
 struct MakoUplinkTelemetryForJson
 {
@@ -579,6 +589,22 @@ void setup()
 
 
 #ifdef ENABLE_QUBITRO_AT_COMPILE_TIME
+  if (usePrimaryQubitroUserDevice)
+  {
+    qubitro_username = qubitro_username_1;
+    qubitro_password = qubitro_password_1;
+    qubitro_device_id = qubitro_device_id_1;
+    qubitro_device_token = qubitro_device_token_1;
+  }
+  else
+  {
+    qubitro_username = qubitro_username_2;
+    qubitro_password = qubitro_password_2;
+    qubitro_device_id = qubitro_device_id_2;
+    qubitro_device_token = qubitro_device_token_2;    
+  }
+
+
   if (enableConnectToQubitro && WiFi.status() == WL_CONNECTED)
   {
     qubitro_connect();
@@ -844,259 +870,320 @@ void loop()
       M5.Lcd.setTextSize(2);
       M5.Lcd.printf("IP: %s", (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "No WiFi         "));
 
-      if (enableReadUplinkComms)
-      {
-        M5.Lcd.setTextSize(2);
-        GOPRO_SERIAL.flush(); // wait until all output data sent
+//      M5.Lcd.setTextSize(2);
 
-        // search for lead-in pattern from Tracker - MBJAEJ
-        const char* nextByteToFind = preamble_pattern;
+      // 1. Skip past any trash characters due to half-duplex and read pre-amble
+      // If uplink messages to be ignored this returns false, which will zero out the Mako telemetry in upload message.
+      bool validPreambleFound = checkForValidPreambleOnUplink();
 
-        while (GOPRO_SERIAL.available() && *nextByteToFind != 0)
-        {
-          char next = GOPRO_SERIAL.read();          // throw away trash bytes from half-duplex clash - always present
-          if (next == *nextByteToFind)
-            nextByteToFind++;
-        }
+      // 2. Get the next free head block to populate in the telemetry pipeline
+      uint16_t blockMaxPayload=0;
+      BlockHeader headBlock = telemetryPipeline.getHeadBlockForPopulating();
 
-        if (*nextByteToFind == 0)
-        {
-          // message pre-amble found - read the rest of the received message.
-          if (writeLogToSerial && writeTelemetryLogToSerial)
-            USB_SERIAL.print("\nPre-Amble Found\n");
+      // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
+      uint16_t roundedUpLength=0;
+      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound, roundedUpLength);
 
-          bool tailDropped=false;
-          uint16_t blockMaxPayload=0;
-          BlockHeader headBlock = telemetryPipeline.getHeadBlockForPopulating(tailDropped);
-          
-          uint8_t* blockBuffer = headBlock.getBuffer(blockMaxPayload);
+      if (!messageValidatedOk)    // validation fails if mako telemetry not invalid size
+        return;
 
-          uint8_t* nextByte = blockBuffer;
+      // 4. Populate the head block with the binary Lemon telemetry data and commit to the telemetry pipeline.
+      populateHeadWithLemonTelemetryAndCommit(headBlock, roundedUpLength);
 
-          uint16_t headMaxPayloadSize = headBlock.getMaxPayloadSize();
+      // 5. Send the next message(s) from pipeline to Qubitro
+      getNextTelemetryMessagesUploadedToQubitro(roundedUpLength);
 
-          while ((nextByte-blockBuffer) < headMaxPayloadSize)    // was while(true)
-          {
-            // must only listen for data when not sending gps data.
-            // after send of gps must flush rx buffer
-            if (GOPRO_SERIAL.available())
-            {
-              *(nextByte++) = GOPRO_SERIAL.read();
-            }
-            else
-            {
-              break;
-            }
-          }
-          
-          if (writeLogToSerial && writeTelemetryLogToSerial)
-            USB_SERIAL.printf("Head Payload Max Size == %hu\n",headMaxPayloadSize);
-
-          // entire message received and stored into blockBuffer (114)
-          uint16_t uplinkMessageLength = nextByte-blockBuffer;
-
-          if (writeLogToSerial && writeTelemetryLogToSerial)
-            USB_SERIAL.printf("Mako uplinkMessageLength == %hu\n",uplinkMessageLength);
-
-          receivedUplinkMessageCount++;
-
-          // check integrity of Mako message here - increment good count or bad count
-          // this needs testing/debugging
-          if (enableAllUplinkMessageIntegrityChecks)
-          {
-            uint16_t uplink_checksum = 0;
-            
-            if (uplinkMessageLength > 2 && (uplinkMessageLength % 2) == 0)
-              uplink_checksum = *((uint16_t*)(blockBuffer + uplinkMessageLength - 2));
-            else
-            {
-              if (writeLogToSerial)
-                USB_SERIAL.printf("decodeUplink bad msg length %%2!=0 %hu\n", uplinkMessageLength);
-              return;
-            }
-
-            bool uplink_checksum_bad = (uplink_checksum != calcUplinkChecksum((char*)blockBuffer,uplinkMessageLength-2));
-            bool uplinkMessageLengthBad = (uplinkMessageLength != 114);
-
-            // hardcoding needs to be removed and replaced with length check according to msgtype
-            if (uplinkMessageLengthBad || uplink_checksum_bad)
-            {
-              if (writeLogToSerial)
-              {
-                if (uplinkMessageLengthBad)
-                  USB_SERIAL.printf("decodeUplink bad msg length %hu && checksum bad %hu\n", uplinkMessageLength, uplink_checksum);
-                else if (uplinkMessageLengthBad)
-                  USB_SERIAL.printf("decodeUplink bad msg length only %hu\n", uplinkMessageLength);
-                else if (uplink_checksum_bad)
-                  USB_SERIAL.printf("decodeUplink bad msg checksum only %hu\n", uplink_checksum);
-              }
-              
-              // clear blockBuffer
-              headBlock.resetPayload();
-
-              badUplinkMessageCount++;
-              
-              return; // this is going to stop any further messages to be uploaded if there are repeated checksum failures.
-              // for now live with this.
-            }
-            else
-            {
-              goodUplinkMessageCount++;
-            }
-          }
-          else
-          {
-            goodUplinkMessageCount++;
-          }
-
-          // round up nextByte to 8 byte boundary if needed (120)
-          while ((nextByte-blockBuffer) < blockMaxPayload && (nextByte-blockBuffer)%8 != 0)
-            *(nextByte++)=0;
-
-          uint16_t roundedUpLength = nextByte-blockBuffer;
-
-          if (writeLogToSerial && writeTelemetryLogToSerial)
-            USB_SERIAL.printf("Mako roundedUpLength == %hu\n",roundedUpLength);
-
-          uint16_t totalMakoAndLemonLength = roundedUpLength + sizeof(LemonTelemetryForStorage);
-
-          // populate basictelemetry
-
-          // construct lemon telemetry, append to the padded mako telemetry message and commit to the telemetry pipeline
-          if (totalMakoAndLemonLength <= blockMaxPayload)
-          {
-            LemonTelemetryForStorage lemon_telemetry_for_storage;
-            constructLemonTelemetryForStorage(lemon_telemetry_for_storage, latestLemonTelemetry, uplinkMessageLength);
-            
-            memcpy(nextByte, (uint8_t*)&lemon_telemetry_for_storage,sizeof(LemonTelemetryForStorage));
-            
-            if (writeLogToSerial && writeTelemetryLogToSerial)
-              USB_SERIAL.printf("memcpy done LemonTelemetryForStorage == sizeof %i\n",sizeof(LemonTelemetryForStorage));
-
-            nextByte+=sizeof(LemonTelemetryForStorage);
-
-            if (writeLogToSerial && writeTelemetryLogToSerial)
-              USB_SERIAL.printf("totalMakoAndLemonLength %hu\n",totalMakoAndLemonLength);
-
-            headBlock.setPayloadSize(totalMakoAndLemonLength);
-
-            bool allowCommitOfHead = false;
-            
-            if (g_offlineStorageThrottleApplied)
-            {
-              if (g_throttledMessageCount == -1)
-              {
-                 g_throttledMessageCount = g_storageThrottleDutyCycle;
-              }
-              else if (g_throttledMessageCount > 0)
-              {
-                g_throttledMessageCount--;
-              }
-              else
-              {
-                g_throttledMessageCount=-1;
-                allowCommitOfHead = true;
-              }
-            }
-            else
-            {
-              g_throttledMessageCount=-1;
-              allowCommitOfHead = true;
-            }
-            
-            // do not commit head block, message storage is throttled due to no internet connection
-            if (allowCommitOfHead)
-            {
-              bool isPipelineFull=false;
-              telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
-            
-              if (writeLogToSerial)
-                USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
-            }
-            else
-            {
-              if (writeLogToSerial)
-                USB_SERIAL.printf("No Commit head block: THROTTLED (%i of %i)- TH=%hu,%hu\n", g_storageThrottleDutyCycle - g_throttledMessageCount, g_storageThrottleDutyCycle,telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
-            }
-          }
-          else
-          {
-            // payload too large to fit into block
-            if (writeLogToSerial)
-              USB_SERIAL.printf("Combined Mako (%hu) and Lemon (%lu) payloads too large (%hu) to fit into telemetry block (%hu)\n",uplinkMessageLength,sizeof(LemonTelemetryForStorage),totalMakoAndLemonLength,headMaxPayloadSize);
-          }
-
-          ///// COMPLETED COMMITTING LATEST TELEMETRY MESSAGE
-
-          ///// NOW GET NEXT TELEMETRY MESSAGE TO SEND TO QUBITRO
-          
-          BlockHeader tailBlock;
-          const uint8_t maxTailPullsPerCycle = 5;
-          uint8_t tailPulls = maxTailPullsPerCycle;
-          while (telemetryPipeline.pullTailBlock(tailBlock) && tailPulls)
-          {
-            tailPulls--;
-            
-            if (writeLogToSerial && writeTelemetryLogToSerial)
-              USB_SERIAL.printf("tail block pulled\n");
-
-            uint16_t maxPayloadSize = 0;
-            uint8_t* makoPayloadBuffer = tailBlock.getBuffer(maxPayloadSize);
-            uint16_t combinedBufferSize = tailBlock.getPayloadSize();
-
-            // 1. parse the mako payload into the mako json payload struct
-            MakoUplinkTelemetryForJson makoJSON;
-            decodeMakoUplinkMessageV5a(makoPayloadBuffer, uplinkMessageLength, makoJSON);
-
-            // 2. parse the lemon payload into the lemon json payload struct
-            LemonTelemetryForJson lemonForUpload;
-            decodeIntoLemonTelemetryForUpload(makoPayloadBuffer+roundedUpLength, combinedBufferSize - roundedUpLength, lemonForUpload);
-
-            // 3. construct the JSON message from the two structs and send MQTT to Qubitro
-            e_q_upload_status uploadStatus=Q_SUCCESS;
-            #ifdef ENABLE_QUBITRO_AT_COMPILE_TIME
-                    if (enableConnectToQubitro && enableUploadToQubitro)
-                      uploadStatus = uploadTelemetryToQubitro(&makoJSON, &lemonForUpload);
-            #endif
-
-            // 5. If sent ok then commit (or no send to Qubitro required), otherwise do nothing
-            if (uploadStatus & 0x01 == Q_SUCCESS)
-            {
-              telemetryPipeline.tailBlockCommitted();
-              
-              g_offlineStorageThrottleApplied = false;
-              
-              if (writeLogToSerial)
-              {
-                USB_SERIAL.printf("tail block committed:  pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
-              }
-            }
-            else
-            {
-              if (writeLogToSerial)
-                USB_SERIAL.printf("tail block NOT committed\n");
-
-              break;    // do not attempt any more tail pulls this event cycle
-            }
-          }
-        }
-      }
-      else
-      {
-        M5.Lcd.setCursor(110, 70);
-        M5.Lcd.printf("%c", journey_activity_indicator[(++journey_activity_count) % 4]);
-        M5.Lcd.setCursor(25, 100);
-        M5.Lcd.setTextSize(3);
-        M5.Lcd.printf(" {%lu}", fixCount);
-      }
-
-      M5.Lcd.setTextSize(4);
+//      M5.Lcd.setTextSize(4);
 
       newFixReceived = false;
     }
   }
 
   checkForLeak(leakAlarmMsg, M5_POWER_SWITCH_PIN);
+}
+
+bool checkForValidPreambleOnUplink()
+{
+  bool validPreambleFound = false;
+
+  // If uplink messages are to be decoded look for pre-amble sequence on Serial Rx
+  if (enableReadUplinkComms)
+  {
+    // 1.1 wait until all transmitted data sent to Mako
+    GOPRO_SERIAL.flush();
+
+    // 1.2 Read received data searching for lead-in pattern from Tracker - MBJAEJ\0
+    const char* nextByteToFind = preamble_pattern;
+
+    while (GOPRO_SERIAL.available() && *nextByteToFind != 0)
+    {
+      // throw away trash bytes from half-duplex clash - always present
+      // not currently looking for contiguous pre-amble - issue
+      char next = GOPRO_SERIAL.read();
+      if (next == *nextByteToFind)
+        nextByteToFind++;
+    }
+
+    if (*nextByteToFind == 0)   // last byte of pre-amble found before no more bytes available
+    {
+      validPreambleFound = true;
+      
+      // message pre-amble found - read the rest of the received message.
+      if (writeLogToSerial && writeTelemetryLogToSerial)
+        USB_SERIAL.print("\nPre-Amble Found\n");
+    }
+  }
+  else
+  {
+    // ignore any Serial Rx/Uplink bytes
+  }
+  
+  return validPreambleFound;
+}
+      
+bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound, uint16_t& roundedUpLength)
+{
+  bool messageValidatedOk = false;
+
+  uint16_t blockMaxPayload = 0;
+  uint8_t* blockBuffer = headBlock.getBuffer(blockMaxPayload);
+  uint8_t* nextBlockByte = blockBuffer;
+  uint16_t headMaxPayloadSize = headBlock.getMaxPayloadSize();
+
+  // 3. Populate the head block buffer with mako telemetry (or null if no pre-amble found)
+  if (validPreambleFound)
+  {
+    // 3.1a Read the uplink message from Serial into the blockBuffer
+    while ((nextBlockByte-blockBuffer) < headMaxPayloadSize)
+    {
+      // must only listen for data when not sending gps data.
+      // after send of gps must flush rx buffer
+      if (GOPRO_SERIAL.available())
+      {
+        *(nextBlockByte++) = GOPRO_SERIAL.read();
+      }
+      else
+      {
+        break;
+      }
+    }
+    receivedUplinkMessageCount++;
+  }
+  else
+  {
+    // 3.1b uplink mako struct to Quibitro will be zero fields
+    memset(nextBlockByte,0,makoHardcodedUplinkMessageLength); 
+    nextBlockByte+=makoHardcodedUplinkMessageLength;
+  }
+      
+  // entire message received and stored into blockBuffer (makoHardcodedUplinkMessageLength)
+  uint16_t uplinkMessageLength = nextBlockByte-blockBuffer;
+
+  if (writeLogToSerial && writeTelemetryLogToSerial)
+    USB_SERIAL.printf("Mako uplinkMessageLength == %hu\n",uplinkMessageLength);
+
+  // check integrity of Mako message here - increment good count or bad count
+  if (validPreambleFound)
+  {
+    if (enableAllUplinkMessageIntegrityChecks)
+    {
+      uint16_t uplink_checksum = 0;
+      
+      if (uplinkMessageLength > 2 && (uplinkMessageLength % 2) == 0)
+        uplink_checksum = *((uint16_t*)(blockBuffer + uplinkMessageLength - 2));
+      else
+      {
+        if (writeLogToSerial)
+          USB_SERIAL.printf("decodeUplink bad msg length %%2!=0 %hu\n", uplinkMessageLength);
+
+        messageValidatedOk = false;              
+        return messageValidatedOk;
+      }
+
+      bool uplink_checksum_bad = (uplink_checksum != calcUplinkChecksum((char*)blockBuffer,uplinkMessageLength-2));
+      bool uplinkMessageLengthBad = (uplinkMessageLength != makoHardcodedUplinkMessageLength);
+
+      // hardcoding needs to be removed and replaced with length check according to msgtype
+      if (uplinkMessageLengthBad || uplink_checksum_bad)
+      {
+        if (writeLogToSerial)
+        {
+          if (uplinkMessageLengthBad)
+            USB_SERIAL.printf("decodeUplink bad msg length %hu && checksum bad %hu\n", uplinkMessageLength, uplink_checksum);
+          else if (uplinkMessageLengthBad)
+            USB_SERIAL.printf("decodeUplink bad msg length only %hu\n", uplinkMessageLength);
+          else if (uplink_checksum_bad)
+            USB_SERIAL.printf("decodeUplink bad msg checksum only %hu\n", uplink_checksum);
+        }
+        
+        // clear blockBuffer
+        headBlock.resetPayload();
+
+        badUplinkMessageCount++;
+
+        messageValidatedOk = false;              
+        return messageValidatedOk;  // this is going to stop any further messages to be uploaded if there are repeated checksum failures.
+        // for now live with this.
+      }
+      else
+      {
+        goodUplinkMessageCount++;
+      }
+    }
+    else
+    {
+      // no checksum validation, assume good uplink message
+      goodUplinkMessageCount++;
+    }
+  }
+  else
+  {
+    // No valid preamble found (or readuplinkcomms disabled)
+    // do not increment checksum counts good/bad.
+  }
+  
+  messageValidatedOk = true;
+
+  // finished processing the uplink Message
+
+  // round up nextBlockByte to 8 byte boundary if needed (120)
+  while ((nextBlockByte-blockBuffer) < blockMaxPayload && (nextBlockByte-blockBuffer)%8 != 0)
+    *(nextBlockByte++)=0;
+
+  roundedUpLength = nextBlockByte-blockBuffer;
+
+  return messageValidatedOk;
+}
+      
+void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint16_t roundedUpLength)
+{
+  uint16_t blockMaxPayload = 0;
+  uint8_t* blockBuffer = headBlock.getBuffer(blockMaxPayload);
+  uint8_t* nextBlockByte = blockBuffer+roundedUpLength;
+
+  if (writeLogToSerial && writeTelemetryLogToSerial)
+    USB_SERIAL.printf("Mako roundedUpLength == %hu\n",roundedUpLength);
+
+  uint16_t totalMakoAndLemonLength = roundedUpLength + sizeof(LemonTelemetryForStorage);
+
+  // populate basictelemetry
+
+  // construct lemon telemetry, append to the padded mako telemetry message and commit to the telemetry pipeline
+  if (totalMakoAndLemonLength <= blockMaxPayload)
+  {
+    LemonTelemetryForStorage lemon_telemetry_for_storage;
+    constructLemonTelemetryForStorage(lemon_telemetry_for_storage, latestLemonTelemetry, uplinkMessageLength);
+    
+    memcpy(nextBlockByte, (uint8_t*)&lemon_telemetry_for_storage,sizeof(LemonTelemetryForStorage));
+    
+    if (writeLogToSerial && writeTelemetryLogToSerial)
+      USB_SERIAL.printf("memcpy done LemonTelemetryForStorage == sizeof %i\n",sizeof(LemonTelemetryForStorage));
+
+    nextBlockByte+=sizeof(LemonTelemetryForStorage);
+
+    if (writeLogToSerial && writeTelemetryLogToSerial)
+      USB_SERIAL.printf("totalMakoAndLemonLength %hu\n",totalMakoAndLemonLength);
+
+    headBlock.setPayloadSize(totalMakoAndLemonLength);
+
+    bool allowCommitOfHead = false;
+    
+    if (g_offlineStorageThrottleApplied)
+    {
+      if (g_throttledMessageCount == -1)
+      {
+         g_throttledMessageCount = g_storageThrottleDutyCycle;
+      }
+      else if (g_throttledMessageCount > 0)
+      {
+        g_throttledMessageCount--;
+      }
+      else
+      {
+        g_throttledMessageCount=-1;
+        allowCommitOfHead = true;
+      }
+    }
+    else
+    {
+      g_throttledMessageCount=-1;
+      allowCommitOfHead = true;
+    }
+    
+    // do not commit head block, message storage is throttled due to no internet connection
+    if (allowCommitOfHead)
+    {
+      bool isPipelineFull=false;
+      telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
+    
+      if (writeLogToSerial)
+        USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+    }
+    else
+    {
+      if (writeLogToSerial)
+        USB_SERIAL.printf("No Commit head block: THROTTLED (%i of %i)- TH=%hu,%hu\n", g_storageThrottleDutyCycle - g_throttledMessageCount, g_storageThrottleDutyCycle,telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+    }
+  }
+  else
+  {
+    // payload too large to fit into block
+    if (writeLogToSerial)
+      USB_SERIAL.printf("Combined Mako (%hu) and Lemon (%lu) payloads too large (%hu) to fit into telemetry block (%hu)\n",uplinkMessageLength,sizeof(LemonTelemetryForStorage),totalMakoAndLemonLength,blockMaxPayload);
+  }
+}
+
+void getNextTelemetryMessagesUploadedToQubitro(const uint16_t roundedUpLength)
+{
+  BlockHeader tailBlock;
+  const uint8_t maxTailPullsPerCycle = 5;
+  uint8_t tailPulls = maxTailPullsPerCycle;
+  while (telemetryPipeline.pullTailBlock(tailBlock) && tailPulls)
+  {
+    tailPulls--;
+    
+    if (writeLogToSerial && writeTelemetryLogToSerial)
+      USB_SERIAL.printf("tail block pulled\n");
+
+    uint16_t maxPayloadSize = 0;
+    uint8_t* makoPayloadBuffer = tailBlock.getBuffer(maxPayloadSize);
+    uint16_t combinedBufferSize = tailBlock.getPayloadSize();
+
+    // 1. parse the mako payload into the mako json payload struct
+    MakoUplinkTelemetryForJson makoJSON;
+    decodeMakoUplinkMessageV5a(makoPayloadBuffer, uplinkMessageLength, makoJSON);
+
+    // 2. parse the lemon payload into the lemon json payload struct
+    LemonTelemetryForJson lemonForUpload;
+    decodeIntoLemonTelemetryForUpload(makoPayloadBuffer+roundedUpLength, combinedBufferSize - roundedUpLength, lemonForUpload);
+
+    // 3. construct the JSON message from the two structs and send MQTT to Qubitro
+    e_q_upload_status uploadStatus=Q_SUCCESS;
+    #ifdef ENABLE_QUBITRO_AT_COMPILE_TIME
+            if (enableConnectToQubitro && enableUploadToQubitro)
+              uploadStatus = uploadTelemetryToQubitro(&makoJSON, &lemonForUpload);
+    #endif
+
+    // 5. If sent ok then commit (or no send to Qubitro required), otherwise do nothing
+    if (uploadStatus & 0x01 == Q_SUCCESS)
+    {
+      telemetryPipeline.tailBlockCommitted();
+      
+      g_offlineStorageThrottleApplied = false;
+      
+      if (writeLogToSerial)
+      {
+        USB_SERIAL.printf("tail block committed:  pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
+      }
+    }
+    else
+    {
+      if (writeLogToSerial)
+        USB_SERIAL.printf("tail block NOT committed\n");
+
+      break;    // do not attempt any more tail pulls this event cycle
+    }
+  }
 }
 
 // TinyGPSPlus must be non-const as act of getting lat and lng resets the updated flag
