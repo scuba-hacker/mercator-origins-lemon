@@ -77,8 +77,13 @@ const char* qubitro_password = NULL;
 const char* qubitro_device_id = NULL;
 const char* qubitro_device_token = NULL;
 
-float qubitro_upload_duty_ms = 0; // disable throttling to qubitro
-uint32_t last_qubitro_upload = 0;
+uint32_t qubitro_upload_min_duty_ms = 0; //980; // throttle upload to qubitro ms
+uint32_t last_qubitro_upload_at = 0;
+
+uint32_t telemetry_head_commit_duty_ms = 990;
+uint32_t last_head_committed_at = 0;
+
+
 
 const int16_t g_storageThrottleDutyCycle = 20; // upload once every 20 messages, or once every 10 seconds - giving 66 minutes of storage.
 int16_t g_throttledMessageCount = -1;
@@ -882,16 +887,28 @@ void loop()
 
       // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
       uint16_t roundedUpLength=0;
-      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound, roundedUpLength);
+      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound);
 
       if (!messageValidatedOk)    // validation fails if mako telemetry not invalid size
         return;
 
-      // 4. Populate the head block with the binary Lemon telemetry data and commit to the telemetry pipeline.
-      populateHeadWithLemonTelemetryAndCommit(headBlock, roundedUpLength);
+      // 4.1 Throttle committing to head - check mako message to see if useraction != 0, otherwise only every 10 seconds
+      bool forceHeadCommit = doesHeadCommitRequireForce(headBlock);
+      
+      if (forceHeadCommit || millis() >= last_head_committed_at + telemetry_head_commit_duty_ms)
+      {
+        last_head_committed_at = millis();
+  
+        // 4.2 Populate the head block with the binary Lemon telemetry data and commit to the telemetry pipeline.
+        populateHeadWithLemonTelemetryAndCommit(headBlock);
+      }
+      else
+      {
+        // do not commit the head block - throw away the entire message
+      }
 
       // 5. Send the next message(s) from pipeline to Qubitro
-      getNextTelemetryMessagesUploadedToQubitro(roundedUpLength);
+      getNextTelemetryMessagesUploadedToQubitro();
 
 //      M5.Lcd.setTextSize(4);
 
@@ -900,6 +917,26 @@ void loop()
   }
 
   checkForLeak(leakAlarmMsg, M5_POWER_SWITCH_PIN);
+}
+
+bool doesHeadCommitRequireForce(BlockHeader& block)
+{
+  bool forceHeadCommit = false;
+
+  uint16_t maxPayloadSize = 0;
+  uint8_t* makoPayloadBuffer = block.getBuffer(maxPayloadSize);
+
+  // 1. parse the mako payload into the mako json payload struct
+  MakoUplinkTelemetryForJson makoJSON;
+  decodeMakoUplinkMessageV5a(makoPayloadBuffer, makoJSON);
+
+  if (makoJSON.user_action & 0x01)
+  {
+    // highlight action - requires forced head commit.
+    forceHeadCommit = true;
+  }
+  
+  return forceHeadCommit;
 }
 
 bool checkForValidPreambleOnUplink()
@@ -941,7 +978,7 @@ bool checkForValidPreambleOnUplink()
   return validPreambleFound;
 }
       
-bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound, uint16_t& roundedUpLength)
+bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound)
 {
   bool messageValidatedOk = false;
 
@@ -1050,13 +1087,15 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
   while ((nextBlockByte-blockBuffer) < blockMaxPayload && (nextBlockByte-blockBuffer)%8 != 0)
     *(nextBlockByte++)=0;
 
-  roundedUpLength = nextBlockByte-blockBuffer;
+  headBlock.setRoundedUpPayloadSize(nextBlockByte-blockBuffer);
 
   return messageValidatedOk;
 }
       
-void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint16_t roundedUpLength)
+void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock)
 {
+  uint16_t roundedUpLength = headBlock.getRoundedUpPayloadSize();
+  
   uint16_t blockMaxPayload = 0;
   uint8_t* blockBuffer = headBlock.getBuffer(blockMaxPayload);
   uint8_t* nextBlockByte = blockBuffer+roundedUpLength;
@@ -1133,11 +1172,12 @@ void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint1
   }
 }
 
-void getNextTelemetryMessagesUploadedToQubitro(const uint16_t roundedUpLength)
+void getNextTelemetryMessagesUploadedToQubitro()
 {
   BlockHeader tailBlock;
   const uint8_t maxTailPullsPerCycle = 5;
   uint8_t tailPulls = maxTailPullsPerCycle;
+  
   while (telemetryPipeline.pullTailBlock(tailBlock) && tailPulls)
   {
     tailPulls--;
@@ -1148,10 +1188,11 @@ void getNextTelemetryMessagesUploadedToQubitro(const uint16_t roundedUpLength)
     uint16_t maxPayloadSize = 0;
     uint8_t* makoPayloadBuffer = tailBlock.getBuffer(maxPayloadSize);
     uint16_t combinedBufferSize = tailBlock.getPayloadSize();
+    const uint16_t roundedUpLength = tailBlock.getRoundedUpPayloadSize();
 
     // 1. parse the mako payload into the mako json payload struct
     MakoUplinkTelemetryForJson makoJSON;
-    decodeMakoUplinkMessageV5a(makoPayloadBuffer, uplinkMessageLength, makoJSON);
+    decodeMakoUplinkMessageV5a(makoPayloadBuffer, makoJSON);
 
     // 2. parse the lemon payload into the lemon json payload struct
     LemonTelemetryForJson lemonForUpload;
@@ -1324,7 +1365,7 @@ bool decodeIntoLemonTelemetryForUpload(uint8_t* msg, const uint16_t length, stru
 }
 
 // uplink msg from mako is 114 bytes
-bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, const uint16_t length, struct MakoUplinkTelemetryForJson& m)
+bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, struct MakoUplinkTelemetryForJson& m)
 {
   bool result = false;
 
@@ -1377,28 +1418,7 @@ bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, const uint16_t length, struc
   m.console_requests_send_tweet = (m.console_flags & 0x01);
   m.console_requests_emergency_tweet = (m.console_flags & 0x02);
 
-/*
-  if (enableAllUplinkMessageIntegrityChecks)
-  {
-    if (length != 114)// ||  uplink_checksum != calcUplinkChecksum(uplinkMsg,length-2))
-    {
-      USB_SERIAL.printf("decodeUplink bad msg: %d msg type, %d length\n", uplink_msgtype, length);
-      badUplinkMessageCount++;
-      return result;
-    }
-    else
-    {
-//      goodUplinkMessageCount++;      
-    }
-  }
-  else
-  {
-    goodUplinkMessageCount++;
-  }
-*/
-
   //  USB_SERIAL.printf("decodeUplink good msg: %d msg type\n",uplink_msgtype);
-
 
   m.goodUplinkMessageCount = goodUplinkMessageCount;
   m.lastGoodUplinkMessage = lastGoodUplinkMessage;
@@ -1862,10 +1882,10 @@ enum e_q_upload_status uploadTelemetryToQubitro(MakoUplinkTelemetryForJson* mako
 {
   enum e_q_upload_status uploadStatus = Q_UNDEFINED_ERROR;
 
-  if (millis() < last_qubitro_upload + qubitro_upload_duty_ms)
+  if (millis() < last_qubitro_upload_at + qubitro_upload_min_duty_ms)
     return Q_SUCCESS_NO_SEND;
   else
-    last_qubitro_upload = millis();
+    last_qubitro_upload_at = millis();
 
   if (enableConnectToQubitro)
   {
