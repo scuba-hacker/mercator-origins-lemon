@@ -19,7 +19,6 @@ static const char* ping_target = "8.8.8.8";    // google DNS
 
 static const char* qubitro_host = "";
 static const int   qubitro_port = 1883;	// 1883 (dev) or 8883 (prod)
-
 static const char* qubitro_username_1 = "";
 static const char* qubitro_password_1 = "";
 static const char* qubitro_device_id_1 = "";
