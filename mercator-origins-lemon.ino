@@ -77,12 +77,22 @@ const char* qubitro_password = NULL;
 const char* qubitro_device_id = NULL;
 const char* qubitro_device_token = NULL;
 
-float qubitro_upload_duty_ms = 0; // disable throttling to qubitro
-uint32_t last_qubitro_upload = 0;
+uint32_t qubitro_upload_min_duty_ms = 980; //980; // throttle upload to qubitro ms
+uint32_t last_qubitro_upload_at = 0;
 
-const int16_t g_storageThrottleDutyCycle = 20; // upload once every 20 messages, or once every 10 seconds - giving 66 minutes of storage.
-int16_t g_throttledMessageCount = -1;
+const uint32_t telemetry_online_head_commit_duty_ms = 2000;
+const uint32_t telemetry_offline_head_commit_duty_ms = 10000;
+uint32_t last_head_committed_at = 0;
 bool g_offlineStorageThrottleApplied = false;
+
+//const int16_t g_storageThrottleDutyCycle = 20; // upload once every 20 messages, or once every 10 seconds - giving 66 minutes of storage.
+//int16_t g_throttledMessageCount = -1;
+
+
+char IPBuffer[16];
+const char* no_wifi_label="No WiFi";
+const char* wait_ip_label="Wait IP";
+const char* lost_ip_label="Lost IP";
 
 const int16_t mqtt_payload_size = 2560;
 char mqtt_payload[mqtt_payload_size];
@@ -90,6 +100,7 @@ WiFiClient wifiClient;
 QubitroMqttClient qubitro_mqttClient(wifiClient);
 bool qubitro_connect();
 unsigned long qubitro_connection_timeout_ms = 30000;  // reducing this doesn't help when mobile coverage lost
+unsigned long qubitro_keep_alive_interval_ms = 15000;
 
 // Mask with 0x01 to see if successful
 enum e_q_upload_status {Q_SUCCESS=1, Q_SUCCESS_SEND=3, Q_SUCCESS_NO_SEND=5, Q_SUCCESS_NOT_ENABLED=7, 
@@ -224,7 +235,7 @@ void updateButtonsAndBuzzer();
 
 const float minimumUSBVoltage = 2.0;
 long USBVoltageDropTime = 0;
-long milliSecondsToWaitForShutDown = 3000;
+long milliSecondsToWaitForShutDown = 1500;
 
 void shutdownIfUSBPowerOff();
 void toggleOTAActive();
@@ -408,18 +419,32 @@ void getM5ImuSensorData(struct LemonTelemetryForJson& t)
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
+  strcpy(IPBuffer,wait_ip_label);
+  
   if (writeLogToSerial)
     USB_SERIAL.printf("***** Connected to %s successfully! *****\n",info.wifi_sta_connected.ssid);
 }
 
 void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 {
+  strcpy(IPBuffer,WiFi.localIP().toString().c_str());
+
   if (writeLogToSerial)
-    USB_SERIAL.printf("***** WiFi CONNECTED IP: %s ******\n",WiFi.localIP().toString());
+    USB_SERIAL.printf("***** WiFi CONNECTED IP: %s ******\n",IPBuffer);
+}
+
+void WiFiLostIP(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  strcpy(IPBuffer,lost_ip_label);
+
+  if (writeLogToSerial)
+    USB_SERIAL.printf("***** WiFi LOST IP ******\n");
 }
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
+  strcpy(IPBuffer,no_wifi_label);
+
   if (writeLogToSerial)
     USB_SERIAL.printf("***** WiFi DISCONNECTED: Reason: %d ******\n",info.wifi_sta_disconnected.reason);
   // Reason 2 
@@ -430,7 +455,7 @@ const int8_t maxPingAttempts = 1;
 int32_t lastCheckForInternetConnectivityAt = 0;
 int32_t checkInternetConnectivityDutyCycle = 10000; // 30 seconds between each check
 
-const uint16_t pipelineLengthIssue = 10;
+const uint16_t pipelineBackedUpLength = 10;
 
 void checkConnectivity()
 {
@@ -443,7 +468,7 @@ void checkConnectivity()
       return;
 
     // primary detection of no connectivity is messages backed up and not draining
-    if (telemetryPipeline.getPipelineLength() > pipelineLengthIssue && 
+    if (telemetryPipeline.getPipelineLength() > pipelineBackedUpLength && 
         telemetryPipeline.isPipelineDraining() == false)
     {
       // messages are backing up and not draining, either a WiFi or 4G or server connection issue
@@ -516,7 +541,10 @@ void setup()
 
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  WiFi.onEvent(WiFiLostIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_LOST_IP);
   WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+
+  strcpy(IPBuffer,no_wifi_label);
 
   if (writeLogToSerial)
     USB_SERIAL.printf("sizeof LemonTelemetry: %lu\n",sizeof(LemonTelemetryForStorage));
@@ -558,14 +586,22 @@ void setup()
   // for shutdown once the power is pulled. Otherwise it will continue on the battery power.
   if (enableOTAServer)
   {
-    shutdownIfUSBPowerOff();
-    if (!setupOTAWebServer(ssid_1, password_1, label_1, timeout_1))
+    bool wifiConnected = false;
+    int wifiConnectRetries = 4;
+    while (!wifiConnected && wifiConnectRetries--)
     {
       shutdownIfUSBPowerOff();
-      if (!setupOTAWebServer(ssid_2, password_2, label_2, timeout_2))
+
+      wifiConnected = setupOTAWebServer(ssid_1, password_1, label_1, timeout_1);
+      if (!wifiConnected)
       {
         shutdownIfUSBPowerOff();
-        setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+        wifiConnected = setupOTAWebServer(ssid_2, password_2, label_2, timeout_2);
+        if (!wifiConnected)
+        {
+          shutdownIfUSBPowerOff();
+          wifiConnected = setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+        }
       }
     }
   }
@@ -709,7 +745,7 @@ void loop()
   if (p_primaryButton->wasReleasefor(1000)) // toggle broker connection
   {
     updateButtonsAndBuzzer();
-    toggleOTAActive();    
+    toggleOTAActive();
   }
   else if (p_primaryButton->wasReleasefor(100)) // toggle ota only
   {
@@ -866,9 +902,36 @@ void loop()
       M5.Lcd.setCursor(5, 5);
       M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
       M5.Lcd.setTextSize(3);
-      M5.Lcd.printf("Fix %lu\nUpR %lu\nOk %lu !%lu\nQOk %lu\n", fixCount, receivedUplinkMessageCount, goodUplinkMessageCount, badUplinkMessageCount, qubitroUploadCount);
+//      M5.Lcd.printf("Fix %lu\nUpR %lu\nOk %lu !%lu\nQOk %lu\n", fixCount, receivedUplinkMessageCount, goodUplinkMessageCount, badUplinkMessageCount, qubitroUploadCount);
+      M5.Lcd.printf("Fix %lu\nR^ %lu !%lu\n",fixCount, goodUplinkMessageCount, badUplinkMessageCount);
+ 
+      if (g_offlineStorageThrottleApplied && telemetryPipeline.isPipelineDraining() == false)
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+      else if (g_offlineStorageThrottleApplied && telemetryPipeline.isPipelineDraining())
+        M5.Lcd.setTextColor(TFT_BLACK, TFT_ORANGE);
+      else if (telemetryPipeline.getPipelineLength() > 2)
+        M5.Lcd.setTextColor(TFT_BLACK, TFT_YELLOW);
+      else
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+
+      M5.Lcd.printf("Pipe %-3hu\n",telemetryPipeline.getPipelineLength());
+       
+      if (WiFi.status() != WL_CONNECTED)
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+      else
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+        
+      M5.Lcd.printf("QOk %lu\n",qubitroUploadCount);
       M5.Lcd.setTextSize(2);
-      M5.Lcd.printf("IP: %s", (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "No WiFi         "));
+
+      if (WiFi.status() != WL_CONNECTED) 
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
+      else
+        M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+
+      M5.Lcd.printf("IP: %-15s", IPBuffer); //(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "No WiFi         "));
+
+      M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
 //      M5.Lcd.setTextSize(2);
 
@@ -881,17 +944,33 @@ void loop()
       BlockHeader headBlock = telemetryPipeline.getHeadBlockForPopulating();
 
       // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
-      uint16_t roundedUpLength=0;
-      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound, roundedUpLength);
+      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound);
 
       if (!messageValidatedOk)    // validation fails if mako telemetry not invalid size
         return;
 
-      // 4. Populate the head block with the binary Lemon telemetry data and commit to the telemetry pipeline.
-      populateHeadWithLemonTelemetryAndCommit(headBlock, roundedUpLength);
+      // 4.1 Throttle committing to head - check mako message to see if useraction != 0, otherwise only every 10 seconds
+      bool forceHeadCommit = doesHeadCommitRequireForce(headBlock);
+
+      uint32_t timeNow = millis();
+
+      // Head will be committed if forced by result of user action, is more than 2 seconds passed when online, or more than 10 seconds passed when offline 
+      if (forceHeadCommit || 
+          (g_offlineStorageThrottleApplied == false && timeNow >= last_head_committed_at + telemetry_online_head_commit_duty_ms) ||
+          (g_offlineStorageThrottleApplied == true && timeNow >= last_head_committed_at + telemetry_offline_head_commit_duty_ms))
+      {
+        last_head_committed_at = timeNow;
+  
+        // 4.2 Populate the head block with the binary Lemon telemetry data and commit to the telemetry pipeline.
+        populateHeadWithLemonTelemetryAndCommit(headBlock);
+      }
+      else
+      {
+        // do not commit the head block - throw away the entire message
+      }
 
       // 5. Send the next message(s) from pipeline to Qubitro
-      getNextTelemetryMessagesUploadedToQubitro(roundedUpLength);
+      getNextTelemetryMessagesUploadedToQubitro();
 
 //      M5.Lcd.setTextSize(4);
 
@@ -900,6 +979,27 @@ void loop()
   }
 
   checkForLeak(leakAlarmMsg, M5_POWER_SWITCH_PIN);
+}
+
+bool doesHeadCommitRequireForce(BlockHeader& block)
+{
+  bool forceHeadCommit = false;
+
+  uint16_t maxPayloadSize = 0;
+  uint8_t* makoPayloadBuffer = block.getBuffer(maxPayloadSize);
+
+  // 1. parse the mako payload into the mako json payload struct
+  const bool preventGlobalUpdate = true; // refactoring needed to remove this
+  MakoUplinkTelemetryForJson makoJSON;
+  decodeMakoUplinkMessageV5a(makoPayloadBuffer, makoJSON, preventGlobalUpdate);
+
+  if (makoJSON.user_action & 0x01)
+  {
+    // highlight action - requires forced head commit.
+    forceHeadCommit = true;
+  }
+  
+  return forceHeadCommit;
 }
 
 bool checkForValidPreambleOnUplink()
@@ -941,7 +1041,7 @@ bool checkForValidPreambleOnUplink()
   return validPreambleFound;
 }
       
-bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound, uint16_t& roundedUpLength)
+bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound)
 {
   bool messageValidatedOk = false;
 
@@ -995,6 +1095,10 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
       {
         if (writeLogToSerial)
           USB_SERIAL.printf("decodeUplink bad msg length %%2!=0 %hu\n", uplinkMessageLength);
+
+        headBlock.resetPayload();
+
+        badUplinkMessageCount++;
 
         messageValidatedOk = false;              
         return messageValidatedOk;
@@ -1050,13 +1154,15 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
   while ((nextBlockByte-blockBuffer) < blockMaxPayload && (nextBlockByte-blockBuffer)%8 != 0)
     *(nextBlockByte++)=0;
 
-  roundedUpLength = nextBlockByte-blockBuffer;
+  headBlock.setRoundedUpPayloadSize(nextBlockByte-blockBuffer);
 
   return messageValidatedOk;
 }
-      
-void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint16_t roundedUpLength)
+
+void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock)
 {
+  uint16_t roundedUpLength = headBlock.getRoundedUpPayloadSize();
+  
   uint16_t blockMaxPayload = 0;
   uint8_t* blockBuffer = headBlock.getBuffer(blockMaxPayload);
   uint8_t* nextBlockByte = blockBuffer+roundedUpLength;
@@ -1086,44 +1192,11 @@ void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint1
 
     headBlock.setPayloadSize(totalMakoAndLemonLength);
 
-    bool allowCommitOfHead = false;
-    
-    if (g_offlineStorageThrottleApplied)
-    {
-      if (g_throttledMessageCount == -1)
-      {
-         g_throttledMessageCount = g_storageThrottleDutyCycle;
-      }
-      else if (g_throttledMessageCount > 0)
-      {
-        g_throttledMessageCount--;
-      }
-      else
-      {
-        g_throttledMessageCount=-1;
-        allowCommitOfHead = true;
-      }
-    }
-    else
-    {
-      g_throttledMessageCount=-1;
-      allowCommitOfHead = true;
-    }
-    
-    // do not commit head block, message storage is throttled due to no internet connection
-    if (allowCommitOfHead)
-    {
-      bool isPipelineFull=false;
-      telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
-    
-      if (writeLogToSerial)
-        USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
-    }
-    else
-    {
-      if (writeLogToSerial)
-        USB_SERIAL.printf("No Commit head block: THROTTLED (%i of %i)- TH=%hu,%hu\n", g_storageThrottleDutyCycle - g_throttledMessageCount, g_storageThrottleDutyCycle,telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
-    }
+    bool isPipelineFull=false;
+    telemetryPipeline.commitPopulatedHeadBlock(headBlock, isPipelineFull);
+  
+    if (writeLogToSerial)
+      USB_SERIAL.printf("Commit head block: maxpipeblocklength=%hu longestpipe=%hu pipelineLength=%hu TH=%hu,%hu\n",telemetryPipeline.getMaximumPipelineLength(),telemetryPipeline.getMaximumDepth(),telemetryPipeline.getPipelineLength(),telemetryPipeline.getTailBlockIndex(),telemetryPipeline.getHeadBlockIndex());
   }
   else
   {
@@ -1133,11 +1206,15 @@ void populateHeadWithLemonTelemetryAndCommit(BlockHeader& headBlock, const uint1
   }
 }
 
-void getNextTelemetryMessagesUploadedToQubitro(const uint16_t roundedUpLength)
+void getNextTelemetryMessagesUploadedToQubitro()
 {
   BlockHeader tailBlock;
-  const uint8_t maxTailPullsPerCycle = 5;
+  const uint8_t maxTailPullsPerCycle = 1;   // now set to 1 because upload to qubitro is only every 2 seconds throttled.
   uint8_t tailPulls = maxTailPullsPerCycle;
+
+  if (millis() < last_qubitro_upload_at + qubitro_upload_min_duty_ms) // upload throttle.
+    return;
+
   while (telemetryPipeline.pullTailBlock(tailBlock) && tailPulls)
   {
     tailPulls--;
@@ -1148,10 +1225,12 @@ void getNextTelemetryMessagesUploadedToQubitro(const uint16_t roundedUpLength)
     uint16_t maxPayloadSize = 0;
     uint8_t* makoPayloadBuffer = tailBlock.getBuffer(maxPayloadSize);
     uint16_t combinedBufferSize = tailBlock.getPayloadSize();
+    const uint16_t roundedUpLength = tailBlock.getRoundedUpPayloadSize();
 
     // 1. parse the mako payload into the mako json payload struct
     MakoUplinkTelemetryForJson makoJSON;
-    decodeMakoUplinkMessageV5a(makoPayloadBuffer, uplinkMessageLength, makoJSON);
+    const bool preventGlobalUpdate = false; // refactoring needed to remove this
+    decodeMakoUplinkMessageV5a(makoPayloadBuffer, makoJSON, preventGlobalUpdate);
 
     // 2. parse the lemon payload into the lemon json payload struct
     LemonTelemetryForJson lemonForUpload;
@@ -1324,7 +1403,7 @@ bool decodeIntoLemonTelemetryForUpload(uint8_t* msg, const uint16_t length, stru
 }
 
 // uplink msg from mako is 114 bytes
-bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, const uint16_t length, struct MakoUplinkTelemetryForJson& m)
+bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, struct MakoUplinkTelemetryForJson& m, const bool preventGlobalUpdate)
 {
   bool result = false;
 
@@ -1377,39 +1456,21 @@ bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, const uint16_t length, struc
   m.console_requests_send_tweet = (m.console_flags & 0x01);
   m.console_requests_emergency_tweet = (m.console_flags & 0x02);
 
-/*
-  if (enableAllUplinkMessageIntegrityChecks)
-  {
-    if (length != 114)// ||  uplink_checksum != calcUplinkChecksum(uplinkMsg,length-2))
-    {
-      USB_SERIAL.printf("decodeUplink bad msg: %d msg type, %d length\n", uplink_msgtype, length);
-      badUplinkMessageCount++;
-      return result;
-    }
-    else
-    {
-//      goodUplinkMessageCount++;      
-    }
-  }
-  else
-  {
-    goodUplinkMessageCount++;
-  }
-*/
-
   //  USB_SERIAL.printf("decodeUplink good msg: %d msg type\n",uplink_msgtype);
-
 
   m.goodUplinkMessageCount = goodUplinkMessageCount;
   m.lastGoodUplinkMessage = lastGoodUplinkMessage;
   m.KBFromMako = KBFromMako;
 
-/* GLOBALS */
-  lastGoodUplinkMessage = millis();
-  KBFromMako = KBFromMako + (((float)uplink_length) / 1024.0);
-
-  uplinkMessageLength = uplink_length;
-
+/* GLOBALS - need to remove/refactor*/
+  if (!preventGlobalUpdate)
+  {
+    lastGoodUplinkMessage = millis();
+    KBFromMako = KBFromMako + (((float)uplink_length) / 1024.0);
+  
+    uplinkMessageLength = uplink_length;
+  }
+  
   result = true;
 
   return result;
@@ -1497,15 +1558,22 @@ void toggleWiFiActive()
   {
     M5.Lcd.printf("Wifi Connecting");
 
-    // startup Wifi only
-    shutdownIfUSBPowerOff();
-    if (!connectWiFiNoOTA(ssid_1, password_1, label_1, timeout_1))
+    bool wifiConnected = false;
+    int wifiConnectRetries = 4;
+    while (!wifiConnected && wifiConnectRetries--)
     {
       shutdownIfUSBPowerOff();
-      if (!connectWiFiNoOTA(ssid_2, password_2, label_2, timeout_2))
+
+      wifiConnected = connectWiFiNoOTA(ssid_1, password_1, label_1, timeout_1);
+      if (!wifiConnected)
       {
         shutdownIfUSBPowerOff();
-        connectWiFiNoOTA(ssid_3, password_3, label_3, timeout_3);
+        wifiConnected = connectWiFiNoOTA(ssid_2, password_2, label_2, timeout_2);
+        if (!wifiConnected)
+        {
+          shutdownIfUSBPowerOff();
+          wifiConnected = connectWiFiNoOTA(ssid_3, password_3, label_3, timeout_3);
+        }
       }
     }
   }
@@ -1737,6 +1805,7 @@ bool qubitro_connect()
     qubitro_mqttClient.setId(qubitro_device_id);
     qubitro_mqttClient.setDeviceIdToken(qubitro_device_id, qubitro_device_token);
     qubitro_mqttClient.setConnectionTimeout(qubitro_connection_timeout_ms);
+    qubitro_mqttClient.setKeepAliveInterval(qubitro_keep_alive_interval_ms);
 
     if (writeLogToSerial)
       USB_SERIAL.println("Connecting to Qubitro...");
@@ -1766,7 +1835,7 @@ bool qubitro_connect()
   return success;
 }
 
-void buildUplinkTelemetryMessageV6a(char* payload, const MakoUplinkTelemetryForJson& m, const LemonTelemetryForJson& l)
+void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTelemetryForJson& m, const struct LemonTelemetryForJson& l)
 {
   currentQubitroUploadAt = millis();
   qubitroUploadDutyCycle = currentQubitroUploadAt - lastQubitroUploadAt;
@@ -1862,11 +1931,6 @@ enum e_q_upload_status uploadTelemetryToQubitro(MakoUplinkTelemetryForJson* mako
 {
   enum e_q_upload_status uploadStatus = Q_UNDEFINED_ERROR;
 
-  if (millis() < last_qubitro_upload + qubitro_upload_duty_ms)
-    return Q_SUCCESS_NO_SEND;
-  else
-    last_qubitro_upload = millis();
-
   if (enableConnectToQubitro)
   {
     if (WiFi.status() == WL_CONNECTED)
@@ -1874,10 +1938,15 @@ enum e_q_upload_status uploadTelemetryToQubitro(MakoUplinkTelemetryForJson* mako
       if (qubitro_mqttClient.connectError() == SUCCESS)
       {
         buildUplinkTelemetryMessageV6a(mqtt_payload, *makoTelemetry, *lemonTelemetry);
+
+        last_qubitro_upload_at = millis();
+
         qubitro_mqttClient.poll();
         qubitro_mqttClient.beginMessage(qubitro_device_id);
         qubitro_mqttClient.print(mqtt_payload);
         int endMessageResult = qubitro_mqttClient.endMessage();
+
+        
         if (endMessageResult == 1)
         {
           uploadStatus = Q_SUCCESS_SEND;
@@ -1904,8 +1973,6 @@ enum e_q_upload_status uploadTelemetryToQubitro(MakoUplinkTelemetryForJson* mako
 
       if (writeLogToSerial)
         USB_SERIAL.println("Q No Wifi\n");
-
-//      noWifiDetectedByQubitroUpload = true;
     }
   }
   else
