@@ -828,11 +828,6 @@ void loop()
 
         populateLatestLemonTelemetry(latestLemonTelemetry, gps);
 
-
-//        Lat = gps.location.lat();     // must have this or the location will not show as updated on next fix
-//        Lng = gps.location.lng();     // must have this or the location will not show as updated on next fix
-//        satellites = gps.satellites.value();
-
 #ifdef ENABLE_TWITTER_AT_COMPILE_TIME
         sendAnyTwitterMessagesRequired();
 #endif ENABLE_TWITTER_AT_COMPILE_TIME
