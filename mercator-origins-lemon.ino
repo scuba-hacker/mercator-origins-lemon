@@ -15,6 +15,7 @@
 #define ENABLE_ELEGANT_OTA_AT_COMPILE_TIME
 
 #include <M5StickCPlus.h>
+//#include "tb_display.h"
 
 // rename the git file "mercator_secrets_template.c" to the filename below, filling in your wifi credentials etc.
 #include "mercator_secrets.c"
@@ -80,7 +81,7 @@ const char* qubitro_device_token = NULL;
 uint32_t qubitro_upload_min_duty_ms = 980; //980; // throttle upload to qubitro ms
 uint32_t last_qubitro_upload_at = 0;
 
-const uint32_t telemetry_online_head_commit_duty_ms = 2000;
+const uint32_t telemetry_online_head_commit_duty_ms = 1900;
 const uint32_t telemetry_offline_head_commit_duty_ms = 10000;
 uint32_t last_head_committed_at = 0;
 bool g_offlineStorageThrottleApplied = false;
@@ -125,7 +126,7 @@ const char* leakAlarmMsg = "    Float\n\n    Leak!";
 
 uint32_t fixCount = 0;
 uint32_t passedChecksumCount = 0;
-bool newFixReceived = false;
+bool processUplinkMessage = false;
 
 uint8_t journey_activity_count = 0;
 const char* journey_activity_indicator = "\\|/-";
@@ -614,6 +615,8 @@ void setup()
   M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Lcd.setCursor(0, 0);
 
+//  tb_display_init(1,1);
+
   gps_serial.begin(GPS_BAUD_RATE, SERIAL_8N1, GROVE_GPS_RX_PIN, GROVE_GPS_TX_PIN);   // pin 33=rx (white M5), pin 32=tx (yellow M5), specifies the grove SCL/SDA pins for Rx/Tx
 
   // setup second serial port for sending/receiving data to/from GoPro
@@ -774,10 +777,12 @@ void loop()
     if (gps.encode(nextByte))
     {
       // Must extract longitude and latitude for the updated flag to be set on next location update.
-      if (gps.location.isValid() && gps.location.isUpdated())
+      if (gps.location.isValid() && gps.location.isUpdated() && gps.isSentenceFix())
       {
         // only enter here on GPRMC and GPGGA msgs with M5 GPS unit, 0.5 sec between each message.
-        // 1 second between updates on the same message type.
+        // GNRMC followed by GNGGA messages for NEO-6M, no perceptible gap between GNRMC and GNGGA.
+        // 1 second between updates on the same message type for M5.
+        // Only require uplink message for GGA.
 
         //////////////////////////////////////////////////////////
         // send message to outgoing serial connection to gopro
@@ -791,7 +796,8 @@ void loop()
 //          USB_SERIAL.printf("Received from GPS: %s", gps.getSentence());
 //        }
 
-        newFixReceived = true;
+        if (gps.isSentenceGGA())
+          processUplinkMessage = true;  // triggers listen for uplink msg
 
         uint32_t newFixCount = gps.sentencesWithFix();
         uint32_t newPassedChecksum = gps.passedChecksum();
@@ -824,7 +830,7 @@ void loop()
           passedChecksumCount = newPassedChecksum;
         }
 
-        M5.Lcd.setCursor(0, 0);
+//        M5.Lcd.setCursor(0, 0);
 
         populateLatestLemonTelemetry(latestLemonTelemetry, gps);
 
@@ -892,10 +898,26 @@ void loop()
   }
   else
   {
-    if (newFixReceived)
+    if (processUplinkMessage)
     {
+      /*
+      M5.Lcd.setTextSize(1);
+
+      char temp[10];
+      memset(temp,0,10);
+      strncpy(temp, gps.getSentence(),7);
+
+      tb_display_print_String(temp);
+      processUplinkMessage = false;
+      
+      gps.location.lat(); // force update flag to be reset.
+
+      return;
+      */
+
       M5.Lcd.setCursor(5, 5);
       M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+          
       M5.Lcd.setTextSize(3);
 //      M5.Lcd.printf("Fix %lu\nUpR %lu\nOk %lu !%lu\nQOk %lu\n", fixCount, receivedUplinkMessageCount, goodUplinkMessageCount, badUplinkMessageCount, qubitroUploadCount);
       M5.Lcd.printf("Fix %lu\nR^ %lu !%lu\n",fixCount, goodUplinkMessageCount, badUplinkMessageCount);
@@ -967,9 +989,7 @@ void loop()
       // 5. Send the next message(s) from pipeline to Qubitro
       getNextTelemetryMessagesUploadedToQubitro();
 
-//      M5.Lcd.setTextSize(4);
-
-      newFixReceived = false;
+      processUplinkMessage = false;
     }
   }
 
