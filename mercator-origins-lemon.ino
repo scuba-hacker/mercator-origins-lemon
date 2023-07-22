@@ -35,7 +35,7 @@ const int UPLINK_BAUD_RATE = 9600;
 #define USB_SERIAL Serial
 #define GOPRO_SERIAL Serial1
 
-const bool enableIMUSensor = true;
+const bool enableIMUSensor = false;
 const bool enableReadUplinkComms = true;
 const bool enableAllUplinkMessageIntegrityChecks = true;
 const bool enableOTAServer = true;          // over the air updates
@@ -400,7 +400,7 @@ struct LemonTelemetryForJson latestLemonTelemetry;
 
 void getM5ImuSensorData(struct LemonTelemetryForJson& t)
 {
-  const float uninitialisedIMU = 0.1;
+  const float uninitialisedIMU = 0.0;
   
   if (enableIMUSensor)
   {
@@ -562,10 +562,13 @@ void setup()
   else
   {
     if (writeLogToSerial)
+    {
       USB_SERIAL.println("IMU Sensor Off");
+    }
     M5.Lcd.println("IMU Sensor Off");
     imuAvailable = false;
   }
+
 
   pinMode(RED_LED_GPIO, OUTPUT); // Red LED - the interior LED to M5 Stick
   digitalWrite(RED_LED_GPIO, HIGH); // switch off
