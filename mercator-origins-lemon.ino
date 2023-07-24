@@ -321,7 +321,7 @@ struct LemonTelemetryForStorage
   uint16_t  vBusVoltage;
   uint16_t  vBusCurrent;
   uint16_t  vBatVoltage;
-  uint16_t  vBatCurrent;          // 40
+  uint16_t  vBatChargeCurrent;          // 40
   uint16_t  uplinkMessageLength;
   uint16_t  gps_hdop;
   uint16_t  gps_course_deg;
@@ -362,7 +362,7 @@ struct LemonTelemetryForJson
   float     vBusVoltage;
   float     vBusCurrent;
   float     vBatVoltage;
-  float     vBatCurrent;
+  float     vBatChargeCurrent;
   uint16_t  uplinkMessageLength;
   double    gps_hdop;
   double    gps_course_deg;
@@ -1306,7 +1306,7 @@ void constructLemonTelemetryForStorage(struct LemonTelemetryForStorage& s, const
   s.vBusVoltage = (uint16_t)(M5.Axp.GetVBusVoltage() * 1000.0);
   s.vBusCurrent = (uint16_t)(M5.Axp.GetVBusCurrent() * 100.0);
   s.vBatVoltage = (uint16_t)(M5.Axp.GetBatVoltage() * 1000.0);
-  s.vBatCurrent = (uint16_t)(M5.Axp.GetBatChargeCurrent() * 100.0);          // 40
+  s.vBatChargeCurrent = (uint16_t)(M5.Axp.GetBatChargeCurrent() * 100.0);          // 40
   s.uplinkMessageLength = uplinkMessageLength;            // GLOBAL
   s.gps_hdop = (uint16_t)(l.gps_hdop * 10.0);
   s.gps_course_deg = (uint16_t)(l.gps_course_deg * 10.0);
@@ -1391,7 +1391,7 @@ bool decodeIntoLemonTelemetryForUpload(uint8_t* msg, const uint16_t length, stru
   l.vBusVoltage = ((float)decode_uint16(msg)) / 1000.0;
   l.vBusCurrent = ((float)decode_uint16(msg)) / 100.0;
   l.vBatVoltage = ((float)decode_uint16(msg)) / 1000.0;
-  l.vBatCurrent = ((float)decode_uint16(msg)) / 100.0;
+  l.vBatChargeCurrent = ((float)decode_uint16(msg)) / 100.0;
   l.uplinkMessageLength = decode_uint16(msg);
   l.gps_hdop = ((float)decode_uint16(msg)) / 10.0;
   l.gps_course_deg = ((float)decode_uint16(msg)) / 10.0;
@@ -1868,7 +1868,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           "\"magnetic_heading_compensated\":%f,\"heading_to_target\":%f,\"distance_to_target\":%f,\"journey_course\":%f,\"journey_distance\":%f,"
           "\"mako_screen_display\":\"%s\",\"mako_on_mins\":%lu,\"mako_user_action\":%d,\"mako_AXP192_temp\":%f,"
           "\"mako_usb_voltage\":%f,\"mako_usb_current\":%f,\"mako_bat_voltage\":%f,\"mako_bat_charge_current\":%f,"
-          "\"fix_count\":%lu,\"lemon_usb_voltage\":%f,\"lemon_usb_current\":%f,\"lemon_bat_voltage\":%f,\"lemon_bat_current\":%f,"
+          "\"fix_count\":%lu,\"lemon_usb_voltage\":%f,\"lemon_usb_current\":%f,\"lemon_bat_voltage\":%f,\"lemon_bat_charge_current\":%f,"
           "\"sats\":%lu,\"hdop\":%f,\"gps_course\":%f,\"gps_speed_knots\":%f,"
 
           "\"mako_lsm_mag_x\":%f,\"mako_lsm_mag_y\":%f,\"mako_lsm_mag_z\":%f,"
@@ -1904,7 +1904,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
 
           l.fixCount,
           
-          l.vBusVoltage, l.vBusCurrent, l.vBatVoltage, l.vBatCurrent,
+          l.vBusVoltage, l.vBusCurrent, l.vBatVoltage, l.vBatChargeCurrent,
 
           l.gps_satellites, l.gps_hdop, l.gps_course_deg, l.gps_knots,
 
