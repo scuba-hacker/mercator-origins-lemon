@@ -35,7 +35,7 @@ const int UPLINK_BAUD_RATE = 9600;
 #define USB_SERIAL Serial
 #define GOPRO_SERIAL Serial1
 
-const bool enableIMUSensor = false;
+const bool enableIMUSensor = true;
 const bool enableReadUplinkComms = true;
 const bool enableAllUplinkMessageIntegrityChecks = true;
 const bool enableOTAServer = true;          // over the air updates
