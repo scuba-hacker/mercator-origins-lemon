@@ -222,6 +222,9 @@ uint16_t qubitroMessageLength = 0;
 float KBToQubitro = 0.0;
 float KBFromMako = 0.0;
 
+const uint32_t uplinkMessageLingerPeriodMs = 100;
+uint32_t uplinkLingerTimeoutAt = 0;
+
 const uint8_t GROVE_GPS_RX_PIN = 33;
 const uint8_t GROVE_GPS_TX_PIN = 32;
 
@@ -1030,10 +1033,14 @@ bool checkForValidPreambleOnUplink()
     // 1.1 wait until all transmitted data sent to Mako
     GOPRO_SERIAL.flush();
 
-    // 1.2 Read received data searching for lead-in pattern from Tracker - MBJAEJ\0
-    const char* nextByteToFind = preamble_pattern;
+    uplinkLingerTimeoutAt = millis()+uplinkMessageLingerPeriodMs;
 
-    while (GOPRO_SERIAL.available() && *nextByteToFind != 0)
+    // 1.2 Read received data searching for lead-in pattern from Tracker - MBJAEJ\0
+    // wait upto uplinkLingerTimeoutAt milliseconds to receive the pre-amble
+    const char* nextByteToFind = preamble_pattern;
+    while ((GOPRO_SERIAL.available() || 
+            !GOPRO_SERIAL.available() && millis() < uplinkLingerTimeoutAt) && 
+            *nextByteToFind != 0)
     {
       // throw away trash bytes from half-duplex clash - always present
       // not currently looking for contiguous pre-amble - issue
