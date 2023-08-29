@@ -81,6 +81,8 @@ const char* qubitro_device_token = NULL;
 uint32_t qubitro_upload_min_duty_ms = 980; //980; // throttle upload to qubitro ms
 uint32_t last_qubitro_upload_at = 0;
 
+uint32_t uplinkMessageListenTimer = 0;
+
 const uint32_t telemetry_online_head_commit_duty_ms = 1900;
 const uint32_t telemetry_offline_head_commit_duty_ms = 10000;
 uint32_t last_head_committed_at = 0;
@@ -157,57 +159,9 @@ template <typename T> struct vector
 {
   T x, y, z;
 };
-/*
-float heading_to_target = 0, distance_to_target = 0;
-double journey_lat = 0, journey_lng = 0;
-float journey_course = 0, journey_distance = 0;
-float magnetic_heading = 0, magnetic_heading_compensated = -0;
-
-uint16_t mako_seconds_on = 0, mako_user_action = 0;
-char mako_screen_display[3];
-
-float mako_AXP192_temp = 0, mako_usb_voltage = 0, mako_usb_current = 0, mako_bat_voltage = 0, mako_bat_charge_current = 0;
-float mako_lsm_mag_x = 0, mako_lsm_mag_y = 0, mako_lsm_mag_z = 0, mako_lsm_acc_x = 0, mako_lsm_acc_y = 0, mako_lsm_acc_z = 0;
-
-float mako_imu_gyro_x = 0, mako_imu_gyro_y = 0, mako_imu_gyro_z = 0, mako_imu_lin_acc_x = 0, mako_imu_lin_acc_y = 0, mako_imu_lin_acc_z = 0, mako_imu_rot_acc_x = 0, mako_imu_rot_acc_y = 0, mako_imu_rot_acc_z = 0;
-float mako_imu_temperature = 0;
-*/
-/*
-float lemon_imu_gyro_x = 0, lemon_imu_gyro_y = 0, lemon_imu_gyro_z = 0, lemon_imu_lin_acc_x = 0, lemon_imu_lin_acc_y = 0, lemon_imu_lin_acc_z = 0, lemon_imu_rot_acc_x = 0, lemon_imu_rot_acc_y = 0, lemon_imu_rot_acc_z = 0;
-float lemon_imu_temperature = 0;
-*/
-
-/*
-void getM5ImuSensorData(float* gyro_x, float* gyro_y, float* gyro_z,
-                        float* lin_acc_x, float* lin_acc_y, float* lin_acc_z,
-                        float* rot_acc_x, float* rot_acc_y, float* rot_acc_z,
-                        float* IMU_temperature)
-{
-  if (enableIMUSensor)
-  {
-    M5.IMU.getGyroData(gyro_x, gyro_y, gyro_z);
-    M5.IMU.getAccelData(lin_acc_x, lin_acc_y, lin_acc_z);
-    M5.IMU.getAhrsData(rot_acc_x, rot_acc_y, rot_acc_z);
-    M5.IMU.getTempData(IMU_temperature);
-  }
-  else
-  {
-    *gyro_x = *gyro_y = *gyro_z = *lin_acc_x = *lin_acc_y = *lin_acc_z = *rot_acc_x = *rot_acc_y = *rot_acc_z = *IMU_temperature = 0.1;
-  }
-}
-*/
-
-
-/*
-float depth = 0, water_pressure = 0, water_temperature = 0, enclosure_temperature = 0, enclosure_humidity = 0, enclosure_air_pressure = 0;
-uint16_t console_flags = 0;
-
-bool console_requests_send_tweet = false;
-bool console_requests_emergency_tweet = false;
-*/
-
 
 const char* preamble_pattern = "MBJAEJ";
+char uplink_preamble_pattern2[] = "MBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJMBJAEJ";
 
 uint16_t sideCount = 0, topCount = 0;
 vector<float> magnetometer_vector, accelerometer_vector;
@@ -215,6 +169,10 @@ vector<float> magnetometer_vector, accelerometer_vector;
 uint32_t receivedUplinkMessageCount = 0;
 uint32_t goodUplinkMessageCount = 0;
 uint32_t badUplinkMessageCount = 0;
+uint32_t badLengthUplinkMsgCount = 0;
+uint32_t badChkSumUplinkMsgCount = 0;
+uint16_t uplinkMessageMissingCount = 0;
+
 uint32_t lastGoodUplinkMessage = 0;
 uint16_t uplinkMessageLength = 0;
 uint32_t qubitroUploadCount = 0;
@@ -222,7 +180,7 @@ uint16_t qubitroMessageLength = 0;
 float KBToQubitro = 0.0;
 float KBFromMako = 0.0;
 
-const uint32_t uplinkMessageLingerPeriodMs = 100;
+const uint32_t uplinkMessageLingerPeriodMs = 300;
 uint32_t uplinkLingerTimeoutAt = 0;
 
 const uint8_t GROVE_GPS_RX_PIN = 33;
@@ -279,7 +237,7 @@ struct MakoUplinkTelemetryForJson
   char  screen_display[3];
   uint16_t seconds_on;
   uint16_t user_action;
-  float AXP192_temp;
+  uint16_t bad_checksum_msgs;
   float usb_voltage;
   float usb_current;
   float bat_voltage;
@@ -299,7 +257,7 @@ struct MakoUplinkTelemetryForJson
   float imu_rot_acc_x;
   float imu_rot_acc_y;
   float imu_rot_acc_z;
-  float imu_temperature;
+  uint16_t good_checksum_msgs;
   uint16_t way_marker_enum;
   char way_marker_label[3];
   char direction_metric[3];  
@@ -307,30 +265,36 @@ struct MakoUplinkTelemetryForJson
   bool console_requests_emergency_tweet;
   uint16_t console_flags;
   uint32_t goodUplinkMessageCount;
+  uint32_t badUplinkMessageCount;
   uint32_t lastGoodUplinkMessage;
   float KBFromMako;
 };
 
+// sizeof is 108 rounded to 112 without badLengthUplinkMsgCount and badChkSumUplinkMsgCount
+// add these in and sizeof is 116 rounded to 120 to keep on 8 byte boundary
 struct LemonTelemetryForStorage 
-// 100 bytes defined, but sizeof is rounded to 104 to keep on 8 byte boundary as there is a double present
+// 108 bytes defined, but sizeof is rounded to 112 to keep on 8 byte boundary as there is a double present
 // The sizeof struct is rounded up to the largest sizeof primitive that is present.
 {
-  uint32_t  goodUplinkMessageCount;
-  uint32_t  consoleDownlinkMsgCount;
   double    gps_lat;              // must be on 8 byte boundary
-  double    gps_lng;              // 24
-  uint32_t  telemetry_timestamp;
-  uint32_t  fixCount;
+  double    gps_lng;              // 
+  uint32_t  goodUplinkMessageCount;
+  uint32_t  badUplinkMessageCount;
+//  uint32_t  badLengthUplinkMsgCount;
+//  uint32_t  badChkSumUplinkMsgCount;
+  uint32_t  consoleDownlinkMsgCount;
+  uint32_t  telemetry_timestamp;       
+  uint32_t  fixCount;                   // 36
   uint16_t  vBusVoltage;
   uint16_t  vBusCurrent;
   uint16_t  vBatVoltage;
-  uint16_t  vBatChargeCurrent;          // 40
+  uint16_t  uplinkMessageMissingCount;          // 44   
   uint16_t  uplinkMessageLength;
   uint16_t  gps_hdop;
   uint16_t  gps_course_deg;
-  uint16_t  gps_knots;            // 48
+  uint16_t  gps_knots;            // 52
   
-  float     imu_gyro_x;
+  float     imu_gyro_x;           // must be on 4 byte boundary
   float     imu_gyro_y;
   float     imu_gyro_z;
   float     imu_lin_acc_x;
@@ -339,33 +303,36 @@ struct LemonTelemetryForStorage
   float     imu_rot_acc_x;
   float     imu_rot_acc_y;
   float     imu_rot_acc_z;
-  float     imu_temperature;      // 88
+  float     imu_temperature;      // 92
 
   float     KBFromMako;               
   uint8_t   gps_hour;
   uint8_t   gps_minute;
   uint8_t   gps_second;
-  uint8_t   gps_day;            // 96
+  uint8_t   gps_day;            // 100
 
   uint8_t   gps_month;
   uint8_t   gps_satellites;
-  uint16_t  gps_year;           // 100
+  uint16_t  gps_year;           // 104
 
-  uint32_t  four_byte_zero_padding;     // 104
+  uint32_t  four_byte_zero_padding;     // 108
 };
 
 struct LemonTelemetryForJson
 {
-  uint32_t  goodUplinkMessageCount;
-  uint32_t  consoleDownlinkMsgCount;
   double    gps_lat;
   double    gps_lng;
+  uint32_t  goodUplinkMessageCount;
+  uint32_t  badUplinkMessageCount;
+//  uint32_t  badLengthUplinkMsgCount;
+//  uint32_t  badChkSumUplinkMsgCount;  
+  uint32_t  consoleDownlinkMsgCount;
   uint32_t  telemetry_timestamp;
   uint32_t  fixCount;
   float     vBusVoltage;
   float     vBusCurrent;
   float     vBatVoltage;
-  float     vBatChargeCurrent;
+  uint32_t  uplinkMessageMissingCount;
   uint16_t  uplinkMessageLength;
   double    gps_hdop;
   double    gps_course_deg;
@@ -626,8 +593,8 @@ void setup()
   gps_serial.begin(GPS_BAUD_RATE, SERIAL_8N1, GROVE_GPS_RX_PIN, GROVE_GPS_TX_PIN);   // pin 33=rx (white M5), pin 32=tx (yellow M5), specifies the grove SCL/SDA pins for Rx/Tx
 
   // setup second serial port for sending/receiving data to/from GoPro
+  GOPRO_SERIAL.setRxBufferSize(1024); // was 256 - must set before begin
   GOPRO_SERIAL.begin(UPLINK_BAUD_RATE, SERIAL_8N1, HAT_GPS_RX_PIN, HAT_GPS_TX_PIN);
-  GOPRO_SERIAL.setRxBufferSize(256);
 
   // cannot use Pin 0 for receive of GPS (resets on startup), can use Pin 36, can use 26
   // cannot use Pin 0 for transmit of GPS (resets on startup), only Pin 26 can be used for transmit.
@@ -745,6 +712,9 @@ char* customiseSentence(char* sentence)
   return sentence;
 }
 
+//char allGPSMsgs[64]="";
+//char nmeaMsgType[10]="";
+
 void loop()
 {
   shutdownIfUSBPowerOff();
@@ -801,9 +771,20 @@ void loop()
 //          // only writes GNGGA and GNRMC messages
 //          USB_SERIAL.printf("Received from GPS: %s", gps.getSentence());
 //        }
-
+        // $GPGSV, $GPGSA, $GNGGA, $GNRMC  
+/*
+        nmeaMsgType[0]=NULL;
+        strncpy(nmeaMsgType,gps.getSentence(),7);
+        nmeaMsgType[7]=NULL;
+        
+        if (strstr(allGPSMsgs,nmeaMsgType) == NULL)
+          strcat(allGPSMsgs,nmeaMsgType);
+*/
         if (gps.isSentenceGGA())
+        {
           processUplinkMessage = true;  // triggers listen for uplink msg
+          uplinkMessageListenTimer = millis();
+        }
 
         uint32_t newFixCount = gps.sentencesWithFix();
         uint32_t newPassedChecksum = gps.passedChecksum();
@@ -921,12 +902,33 @@ void loop()
       return;
       */
 
+
+      // 1. Skip past any trash characters due to half-duplex and read pre-amble
+      // If uplink messages to be ignored this returns false, which will zero out the Mako telemetry in upload message.
+      bool validPreambleFound = checkForValidPreambleOnUplink();
+      if (validPreambleFound)      
+        uplinkMessageListenTimer = millis() - uplinkMessageListenTimer;
+      else
+        uplinkMessageListenTimer = 0;
+
+      // 2. Get the next free head block to populate in the telemetry pipeline
+      uint16_t blockMaxPayload=0;
+      BlockHeader headBlock = telemetryPipeline.getHeadBlockForPopulating();
+
+      // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
+      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound);
+
       M5.Lcd.setCursor(5, 5);
       M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
           
       M5.Lcd.setTextSize(3);
-//      M5.Lcd.printf("Fix %lu\nUpR %lu\nOk %lu !%lu\nQOk %lu\n", fixCount, receivedUplinkMessageCount, goodUplinkMessageCount, badUplinkMessageCount, qubitroUploadCount);
-      M5.Lcd.printf("Fix %lu\nR^ %lu !%lu\n",fixCount, goodUplinkMessageCount, badUplinkMessageCount);
+
+      const bool showBadChecksumInsteadofAllBad=true;
+
+      if (showBadChecksumInsteadofAllBad)
+        M5.Lcd.printf("Fix %lu\nR^ %lu !%lu\n",fixCount, goodUplinkMessageCount, badChkSumUplinkMsgCount);
+      else
+        M5.Lcd.printf("Fix %lu\nR^ %lu !%lu\n",fixCount, goodUplinkMessageCount, badUplinkMessageCount);
  
       if (g_offlineStorageThrottleApplied && telemetryPipeline.isPipelineDraining() == false)
         M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
@@ -937,14 +939,19 @@ void loop()
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
-      M5.Lcd.printf("Pipe %-3hu\n",telemetryPipeline.getPipelineLength());
-       
+      const bool showPipeLength=false;
+      
+      if (showPipeLength)
+        M5.Lcd.printf("P %-3hu Mis %hu\n",telemetryPipeline.getPipelineLength(),uplinkMessageMissingCount);
+      else
+        M5.Lcd.printf("^%-3hu Mis %hu\n",badLengthUplinkMsgCount,uplinkMessageMissingCount);
+
       if (WiFi.status() != WL_CONNECTED)
         M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
         
-      M5.Lcd.printf("QOk %lu\n",qubitroUploadCount);
+      M5.Lcd.printf("Q %lu UL %lu  \n",qubitroUploadCount,uplinkMessageListenTimer);
       M5.Lcd.setTextSize(2);
 
       if (WiFi.status() != WL_CONNECTED) 
@@ -955,22 +962,13 @@ void loop()
       M5.Lcd.printf("IP: %-15s", IPBuffer); //(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "No WiFi         "));
 
       M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-
-//      M5.Lcd.setTextSize(2);
-
-      // 1. Skip past any trash characters due to half-duplex and read pre-amble
-      // If uplink messages to be ignored this returns false, which will zero out the Mako telemetry in upload message.
-      bool validPreambleFound = checkForValidPreambleOnUplink();
-
-      // 2. Get the next free head block to populate in the telemetry pipeline
-      uint16_t blockMaxPayload=0;
-      BlockHeader headBlock = telemetryPipeline.getHeadBlockForPopulating();
-
-      // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
-      bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound);
-
+      uplinkMessageListenTimer = 0;
+      
       if (!messageValidatedOk)    // validation fails if mako telemetry not invalid size
+      {
+        processUplinkMessage = false;
         return;
+      }
 
       // 4.1 Throttle committing to head - check mako message to see if useraction != 0, otherwise only every 10 seconds
       bool forceHeadCommit = doesHeadCommitRequireForce(headBlock);
@@ -996,6 +994,10 @@ void loop()
       getNextTelemetryMessagesUploadedToQubitro();
 
       processUplinkMessage = false;
+    }
+    else
+    {
+      uplinkMessageListenTimer = 0;
     }
   }
 
@@ -1023,6 +1025,79 @@ bool doesHeadCommitRequireForce(BlockHeader& block)
   return forceHeadCommit;
 }
 
+
+bool checkForValidPreambleOnUplink()
+{
+  bool validPreambleFound = false;
+
+  // If uplink messages are to be decoded look for pre-amble sequence on Serial Rx
+  if (enableReadUplinkComms)
+  {
+    // 1.1 wait until all transmitted data sent to Mako
+    GOPRO_SERIAL.flush();
+
+    uplinkLingerTimeoutAt = millis()+uplinkMessageLingerPeriodMs;
+
+    // 1.2 Read received data searching for lead-in pattern from Tracker - MBJAEJ\0
+    // wait upto uplinkLingerTimeoutAt milliseconds to receive the pre-amble
+
+char uplink_preamble_first_segment[] = "MBJ";
+char uplink_preamble_second_segment[] = "AEJ";
+
+    
+    const char* nextByteToFind = uplink_preamble_first_segment;
+    const char* nextSecondSegmentByteToFind = uplink_preamble_second_segment;
+    
+    while ((GOPRO_SERIAL.available() || 
+            !GOPRO_SERIAL.available() && millis() < uplinkLingerTimeoutAt) && 
+            *nextByteToFind != 0)
+    {
+      // throw away trash bytes from half-duplex clash - always present
+      char next = GOPRO_SERIAL.read();
+      if (next == *nextByteToFind)
+        nextByteToFind++;
+      else
+        nextByteToFind = uplink_preamble_first_segment;    // make sure contiguous preamble found, reset search for first char of preamble
+    }
+
+    if (*nextByteToFind == 0)
+    {
+      // found an MBJ now find an AEJ, ignoring any other MBJs
+     while ((GOPRO_SERIAL.available() || 
+            !GOPRO_SERIAL.available() && millis() < uplinkLingerTimeoutAt) && 
+            *nextSecondSegmentByteToFind != 0)
+     {
+        char next = GOPRO_SERIAL.read();
+        if (next == *nextSecondSegmentByteToFind)
+          nextSecondSegmentByteToFind++;
+        else
+          nextSecondSegmentByteToFind = uplink_preamble_second_segment;    // make sure contiguous preamble found, reset search for first char of preamble
+      }
+    }
+
+    if (*nextSecondSegmentByteToFind == 0)   // last byte of pre-amble found before no more bytes available
+    {
+      validPreambleFound = true;
+      
+      // message pre-amble found - read the rest of the received message.
+      if (writeLogToSerial && writeTelemetryLogToSerial)
+        USB_SERIAL.print("\nPre-Amble Found\n");
+    }
+    else
+    {
+      uplinkMessageMissingCount++;
+    }
+  }
+  else
+  {
+    // ignore any Serial Rx/Uplink bytes
+  }
+  
+  return validPreambleFound;
+}
+      
+
+/*
 bool checkForValidPreambleOnUplink()
 {
   bool validPreambleFound = false;
@@ -1043,10 +1118,11 @@ bool checkForValidPreambleOnUplink()
             *nextByteToFind != 0)
     {
       // throw away trash bytes from half-duplex clash - always present
-      // not currently looking for contiguous pre-amble - issue
       char next = GOPRO_SERIAL.read();
       if (next == *nextByteToFind)
         nextByteToFind++;
+      else
+        nextByteToFind = preamble_pattern;    // make sure contiguous preamble found, reset search for first char of preamble
     }
 
     if (*nextByteToFind == 0)   // last byte of pre-amble found before no more bytes available
@@ -1057,6 +1133,10 @@ bool checkForValidPreambleOnUplink()
       if (writeLogToSerial && writeTelemetryLogToSerial)
         USB_SERIAL.print("\nPre-Amble Found\n");
     }
+    else
+    {
+      uplinkMessageMissingCount++;
+    }
   }
   else
   {
@@ -1065,7 +1145,7 @@ bool checkForValidPreambleOnUplink()
   
   return validPreambleFound;
 }
-      
+      */
 bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPreambleFound)
 {
   bool messageValidatedOk = false;
@@ -1100,6 +1180,8 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
     memset(nextBlockByte,0,makoHardcodedUplinkMessageLength); 
     nextBlockByte+=makoHardcodedUplinkMessageLength;
   }
+
+  GOPRO_SERIAL.flush();
       
   // entire message received and stored into blockBuffer (makoHardcodedUplinkMessageLength)
   uint16_t uplinkMessageLength = nextBlockByte-blockBuffer;
@@ -1125,6 +1207,8 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
 
         badUplinkMessageCount++;
 
+        badLengthUplinkMsgCount++;
+        
         messageValidatedOk = false;              
         return messageValidatedOk;
       }
@@ -1149,6 +1233,11 @@ bool populateHeadWithMakoTelemetry(BlockHeader& headBlock, const bool validPream
         headBlock.resetPayload();
 
         badUplinkMessageCount++;
+
+        if (uplinkMessageLengthBad)
+          badLengthUplinkMsgCount++;
+        else if (uplink_checksum_bad)
+          badChkSumUplinkMsgCount++;
 
         messageValidatedOk = false;              
         return messageValidatedOk;  // this is going to stop any further messages to be uploaded if there are repeated checksum failures.
@@ -1305,15 +1394,18 @@ void populateLatestLemonTelemetry(LemonTelemetryForJson& l, TinyGPSPlus& g)
 
 void constructLemonTelemetryForStorage(struct LemonTelemetryForStorage& s, const LemonTelemetryForJson l, const uint16_t uplinkMessageLength)
 {
+  s.gps_lat = l.gps_lat;  s.gps_lng = l.gps_lng;          // must be on 8 byte boundary 
   s.goodUplinkMessageCount = goodUplinkMessageCount;      // GLOBAL
+  s.badUplinkMessageCount = badUplinkMessageCount;      // GLOBAL
+//  s.badLengthUplinkMsgCount = badLengthUplinkMsgCount;      // GLOBAL
+//  s.badChkSumUplinkMsgCount = badChkSumUplinkMsgCount;      // GLOBAL  
   s.consoleDownlinkMsgCount = consoleDownlinkMsgCount;    // GLOBAL
-  s.gps_lat = l.gps_lat;  s.gps_lng = l.gps_lng;          // 24 must be on 8 byte boundary 
   s.telemetry_timestamp = lastGoodUplinkMessage;          // GLOBAL
   s.fixCount = fixCount;                                  // GLOBAL
   s.vBusVoltage = (uint16_t)(M5.Axp.GetVBusVoltage() * 1000.0);
   s.vBusCurrent = (uint16_t)(M5.Axp.GetVBusCurrent() * 100.0);
   s.vBatVoltage = (uint16_t)(M5.Axp.GetBatVoltage() * 1000.0);
-  s.vBatChargeCurrent = (uint16_t)(M5.Axp.GetBatChargeCurrent() * 100.0);          // 40
+  s.uplinkMessageMissingCount = (uint16_t)(uplinkMessageMissingCount);          // 40
   s.uplinkMessageLength = uplinkMessageLength;            // GLOBAL
   s.gps_hdop = (uint16_t)(l.gps_hdop * 10.0);
   s.gps_course_deg = (uint16_t)(l.gps_course_deg * 10.0);
@@ -1389,16 +1481,19 @@ void decode_uint16_into_3_char_array(uint8_t*& msg, char* target)
 
 bool decodeIntoLemonTelemetryForUpload(uint8_t* msg, const uint16_t length, struct LemonTelemetryForJson& l)
 {
-  l.goodUplinkMessageCount = decode_uint32(msg);
-  l.consoleDownlinkMsgCount = decode_uint32(msg);
   l.gps_lat = decode_double(msg);
-  l.gps_lng = decode_double(msg);          // 24
+  l.gps_lng = decode_double(msg);         
+  l.goodUplinkMessageCount = decode_uint32(msg);
+  l.badUplinkMessageCount = decode_uint32(msg);
+//  l.badLengthUplinkMsgCount = decode_uint32(msg);
+//  l.badChkSumUplinkMsgCount = decode_uint32(msg); 
+  l.consoleDownlinkMsgCount = decode_uint32(msg);
   l.telemetry_timestamp = decode_uint32(msg);
   l.fixCount = decode_uint32(msg);
   l.vBusVoltage = ((float)decode_uint16(msg)) / 1000.0;
   l.vBusCurrent = ((float)decode_uint16(msg)) / 100.0;
   l.vBatVoltage = ((float)decode_uint16(msg)) / 1000.0;
-  l.vBatChargeCurrent = ((float)decode_uint16(msg)) / 100.0;
+  l.uplinkMessageMissingCount = decode_uint16(msg);
   l.uplinkMessageLength = decode_uint16(msg);
   l.gps_hdop = ((float)decode_uint16(msg)) / 10.0;
   l.gps_course_deg = ((float)decode_uint16(msg)) / 10.0;
@@ -1454,7 +1549,7 @@ bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, struct MakoUplinkTelemetryFo
   m.seconds_on = decode_uint16(uplinkMsg);
   m.user_action = decode_uint16(uplinkMsg);
 
-  m.AXP192_temp = ((float)decode_uint16(uplinkMsg)) / 10.0;
+  m.bad_checksum_msgs = decode_uint16(uplinkMsg);
   m.usb_voltage = ((float)decode_uint16(uplinkMsg)) / 1000.0;
   m.usb_current = ((float)decode_uint16(uplinkMsg)) / 100.0;
   m.bat_voltage = ((float)decode_uint16(uplinkMsg)) / 1000.0;
@@ -1466,7 +1561,7 @@ bool decodeMakoUplinkMessageV5a(uint8_t* uplinkMsg, struct MakoUplinkTelemetryFo
   m.imu_lin_acc_x = decode_float(uplinkMsg); m.imu_lin_acc_y = decode_float(uplinkMsg); m.imu_lin_acc_z = decode_float(uplinkMsg);
   m.imu_rot_acc_x = decode_float(uplinkMsg); m.imu_rot_acc_y = decode_float(uplinkMsg); m.imu_rot_acc_z = decode_float(uplinkMsg);
 
-  m.imu_temperature = ((float)decode_uint16(uplinkMsg)) / 10.0;
+  m.good_checksum_msgs = decode_uint16(uplinkMsg);
 
   m.way_marker_enum = decode_uint16(uplinkMsg);
   
@@ -1873,9 +1968,9 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           "{\"UTC_time\":\"%02d:%02d:%02d\",\"UTC_date\":\"%02d:%02d:%02d\",\"lemon_on_mins\":%lu,\"coordinates\":[%f,%f],\"depth\":%f,"
           "\"water_pressure\":%f,\"water_temperature\":%f,\"enclosure_temperature\":%f,\"enclosure_humidity\":%f,\"enclosure_air_pressure\":%f,"
           "\"magnetic_heading_compensated\":%f,\"heading_to_target\":%f,\"distance_to_target\":%f,\"journey_course\":%f,\"journey_distance\":%f,"
-          "\"mako_screen_display\":\"%s\",\"mako_on_mins\":%lu,\"mako_user_action\":%d,\"mako_AXP192_temp\":%f,"
+          "\"mako_screen_display\":\"%s\",\"mako_on_mins\":%lu,\"mako_user_action\":%d,\"mako_rx_bad_checksum_msgs\":%hu,"
           "\"mako_usb_voltage\":%f,\"mako_usb_current\":%f,\"mako_bat_voltage\":%f,\"mako_bat_charge_current\":%f,"
-          "\"fix_count\":%lu,\"lemon_usb_voltage\":%f,\"lemon_usb_current\":%f,\"lemon_bat_voltage\":%f,\"lemon_bat_charge_current\":%f,"
+          "\"fix_count\":%lu,\"lemon_usb_voltage\":%f,\"lemon_usb_current\":%f,\"lemon_bat_voltage\":%f,\"uplink_missing_msgs_from_mako\":%hu,"
           "\"sats\":%lu,\"hdop\":%f,\"gps_course\":%f,\"gps_speed_knots\":%f,"
 
           "\"mako_lsm_mag_x\":%f,\"mako_lsm_mag_y\":%f,\"mako_lsm_mag_z\":%f,"
@@ -1884,7 +1979,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           "\"mako_imu_gyro_x\":%f,\"mako_imu_gyro_y\":%f,\"mako_imu_gyro_z\":%f,"
           "\"mako_imu_lin_acc_x\":%f,\"mako_imu_lin_acc_y\":%f,\"mako_imu_lin_acc_z\":%f,"
           "\"mako_imu_rot_acc_x\":%f,\"mako_imu_rot_acc_y\":%f,\"mako_imu_rot_acc_z\":%f,"
-          "\"mako_imu_temperature\":%f,"
+          "\"mako_rx_good_checksum_msgs\":%hu,"
 
           "\"lemon_imu_gyro_x\":%f,\"lemon_imu_gyro_y\":%f,\"lemon_imu_gyro_z\":%f,"
           "\"lemon_imu_lin_acc_x\":%f,\"lemon_imu_lin_acc_y\":%f,\"lemon_imu_lin_acc_z\":%f,"
@@ -1893,9 +1988,15 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
 
           "\"mako_waymarker_e\":%d,\"mako_waymarker_label\":\"%s\",\"mako_direction_metric\":\"%s\","
 
-          "\"uplink_msgs_from_mako\":%lu,\"uplink_msg_length\":%hu,\"msgs_to_qubitro\":%d,\"qubitro_msg_length\":%hu,\"KB_to_qubitro\":%.1f,\"KB_uplinked_from_mako\":%.1f,"
+          "\"uplink_good_msgs_from_mako\":%lu,\"uplink_bad_msgs_from_mako\":%lu,\"uplink_msg_length\":%hu,\"msgs_to_qubitro\":%d,\"qubitro_msg_length\":%hu,\"KB_to_qubitro\":%.1f,\"KB_uplinked_from_mako\":%.1f,"
           "\"live_metrics\":%lu,\"qubitro_upload_duty_cycle\":%lu,\"console_downlink_msg\":%lu,\"geo_location\":\"Gozo, Malta\""
           "}",
+
+          // with bad length and bad checksum stats
+          //           "\"uplink_good_msgs_from_mako\":%lu,\"uplink_bad_msgs_from_mako\":%lu,\"uplink_bad_len_msgs_from_mako\":%lu,\"uplink_bad_chk_msgs_from_mako\":%lu,\"uplink_msg_length\":%hu,\"msgs_to_qubitro\":%d,\"qubitro_msg_length\":%hu,\"KB_to_qubitro\":%.1f,\"KB_uplinked_from_mako\":%.1f,"
+
+          
+          
           l.gps_hour, l.gps_minute, l.gps_second,
           l.gps_day, l.gps_month, l.gps_year,
           currentQubitroUploadAt / 1000 / 60,   // lemon on minutes
@@ -1907,11 +2008,11 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           m.screen_display,
           m.seconds_on,
           m.user_action,
-          m.AXP192_temp, m.usb_voltage, m.usb_current, m.bat_voltage, m.bat_charge_current,
+          m.bad_checksum_msgs, m.usb_voltage, m.usb_current, m.bat_voltage, m.bat_charge_current,
 
           l.fixCount,
           
-          l.vBusVoltage, l.vBusCurrent, l.vBatVoltage, l.vBatChargeCurrent,
+          l.vBusVoltage, l.vBusCurrent, l.vBatVoltage, l.uplinkMessageMissingCount,
 
           l.gps_satellites, l.gps_hdop, l.gps_course_deg, l.gps_knots,
 
@@ -1920,7 +2021,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           m.imu_gyro_x,    m.imu_gyro_y,    m.imu_gyro_z,
           m.imu_lin_acc_x, m.imu_lin_acc_y, m.imu_lin_acc_z,
           m.imu_rot_acc_x, m.imu_rot_acc_y, m.imu_rot_acc_z,
-          m.imu_temperature,
+          m.good_checksum_msgs,
           l.imu_gyro_x,    l.imu_gyro_y,    l.imu_gyro_z,
           l.imu_lin_acc_x, l.imu_lin_acc_y, l.imu_lin_acc_z,
           l.imu_rot_acc_x, l.imu_rot_acc_y, l.imu_rot_acc_z,
@@ -1929,6 +2030,9 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           m.way_marker_enum, m.way_marker_label, m.direction_metric,
           
           l.goodUplinkMessageCount,
+          l.badUplinkMessageCount,
+//          l.badLengthUplinkMsgCount,
+//          l.badChkSumUplinkMsgCount,
           l.uplinkMessageLength,
           qubitroUploadCount,
           qubitroMessageLength,             ///  ????
@@ -1971,7 +2075,6 @@ enum e_q_upload_status uploadTelemetryToQubitro(MakoUplinkTelemetryForJson* mako
         qubitro_mqttClient.print(mqtt_payload);
         int endMessageResult = qubitro_mqttClient.endMessage();
 
-        
         if (endMessageResult == 1)
         {
           uploadStatus = Q_SUCCESS_SEND;
