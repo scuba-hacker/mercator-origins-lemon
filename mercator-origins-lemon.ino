@@ -46,6 +46,9 @@ const bool enableConnectToSMTP = false;
 
 uint32_t consoleDownlinkMsgCount = 0;
 
+enum e_display_brightness {OFF_DISPLAY = 0, DIM_DISPLAY = 25, HALF_BRIGHT_DISPLAY = 50, BRIGHTEST_DISPLAY = 100};
+const e_display_brightness ScreenBrightness = BRIGHTEST_DISPLAY;
+
 #ifdef ENABLE_TWITTER_AT_COMPILE_TIME
 // see mercator_secrets.c for Twitter login credentials
 #include <WiFiClientSecure.h>   // Twitter
@@ -551,7 +554,7 @@ void setup()
 
   M5.Lcd.setRotation(1);
   M5.Lcd.setTextSize(2);
-  M5.Axp.ScreenBreath(14);
+  M5.Axp.ScreenBreath(ScreenBrightness);
 
   p_primaryButton = &M5.BtnA;
   p_secondButton = &M5.BtnB;
@@ -939,7 +942,7 @@ void loop()
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
-      const bool showPipeLength=false;
+      const bool showPipeLength=true;
       
       if (showPipeLength)
         M5.Lcd.printf("P %-3hu Mis %hu\n",telemetryPipeline.getPipelineLength(),uplinkMessageMissingCount);
@@ -951,7 +954,7 @@ void loop()
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
         
-      M5.Lcd.printf("Q %lu UL %lu  \n",qubitroUploadCount,uplinkMessageListenTimer);
+      M5.Lcd.printf("Q %lu UT %lu  \n",qubitroUploadCount,uplinkMessageListenTimer);
       M5.Lcd.setTextSize(2);
 
       if (WiFi.status() != WL_CONNECTED) 
@@ -1726,9 +1729,9 @@ void shutdownIfUSBPowerOff()
 
 void fadeToBlackAndShutdown()
 {
-  for (int i = 14; i > 6; i--)
+  for (int i = 90; i > 0; i=i-15)
   {
-    M5.Axp.ScreenBreath(i);             // 7-14 fade to black
+    M5.Axp.ScreenBreath(i);             // fade to black
     delay(100);
   }
 
