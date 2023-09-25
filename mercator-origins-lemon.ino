@@ -209,9 +209,6 @@ void toggleQubitroBroker();
 
 void checkForLeak(const char* msg, const uint8_t pin);
 
-void sendFakeGPSData1();
-void sendFakeGPSData2();
-
 bool setupOTAWebServer(const char* _ssid, const char* _password, const char* label, uint32_t timeout);
 bool connectWiFiNoOTA(const char* _ssid, const char* _password, const char* label, uint32_t timeout);
 
