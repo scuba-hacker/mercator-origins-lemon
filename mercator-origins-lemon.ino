@@ -24,7 +24,7 @@
 
 TelemetryPipeline telemetryPipeline;
 
-#include <TinyGPS++.h>
+#include "TinyGPS++_mercator.h"
 
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
@@ -556,6 +556,8 @@ void setup()
   p_primaryButton = &M5.BtnA;
   p_secondButton = &M5.BtnB;
 
+  delay(5000);
+
   // if there is an infinite restart loop after connecting to wifi this will allow
   // for shutdown once the power is pulled. Otherwise it will continue on the battery power.
   if (enableOTAServer)
@@ -570,11 +572,11 @@ void setup()
       if (!wifiConnected)
       {
         shutdownIfUSBPowerOff();
-        wifiConnected = setupOTAWebServer(ssid_2, password_2, label_2, timeout_2);
+        wifiConnected = setupOTAWebServer(ssid_1, password_1, label_1, timeout_1);
         if (!wifiConnected)
         {
           shutdownIfUSBPowerOff();
-          wifiConnected = setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
+          wifiConnected = setupOTAWebServer(ssid_1, password_1, label_1, timeout_1);
         }
       }
     }
@@ -721,12 +723,7 @@ void loop()
 
   checkConnectivity();
   
-  if (p_primaryButton->wasReleasefor(1000)) // toggle broker connection
-  {
-    updateButtonsAndBuzzer();
-    toggleOTAActive();
-  }
-  else if (p_primaryButton->wasReleasefor(100)) // toggle ota only
+  if (p_primaryButton->wasReleasefor(100)) // toggle ota only
   {
     updateButtonsAndBuzzer();
     toggleOTAActive();
