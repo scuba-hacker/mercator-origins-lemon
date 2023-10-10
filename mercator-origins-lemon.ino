@@ -24,7 +24,7 @@
 
 TelemetryPipeline telemetryPipeline;
 
-#include "TinyGPS++_mercator.h"
+#include "TinyGPSPlusPlus_mercator.h"
 
 const int SCREEN_LENGTH = 240;
 const int SCREEN_WIDTH = 135;
