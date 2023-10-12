@@ -717,9 +717,6 @@ char* customiseSentence(char* sentence)
   return sentence;
 }
 
-//char allGPSMsgs[64]="";
-//char nmeaMsgType[10]="";
-
 void loop()
 {
   shutdownIfUSBPowerOff();
@@ -749,10 +746,6 @@ void loop()
 
     char nextByte = gps_serial.read();
 
-    // these serial write outputs all bytes received
-    //    if (writeLogToSerial)
-    //    USB_SERIAL.write(nextByte);
-
     if (gps.encode(nextByte))
     {
       // Must extract longitude and latitude for the updated flag to be set on next location update.
@@ -769,20 +762,6 @@ void loop()
         consoleDownlinkMsgCount++;
         //////////////////////////////////////////////////////////
 
-//        if (writeLogToSerial)
-//       {
-//          // only writes GNGGA and GNRMC messages
-//          USB_SERIAL.printf("Received from GPS: %s", gps.getSentence());
-//        }
-        // $GPGSV, $GPGSA, $GNGGA, $GNRMC  
-/*
-        nmeaMsgType[0]=NULL;
-        strncpy(nmeaMsgType,gps.getSentence(),7);
-        nmeaMsgType[7]=NULL;
-        
-        if (strstr(allGPSMsgs,nmeaMsgType) == NULL)
-          strcat(allGPSMsgs,nmeaMsgType);
-*/
         if (gps.isSentenceGGA())
         {
           processUplinkMessage = true;  // triggers listen for uplink msg
@@ -819,8 +798,6 @@ void loop()
         {
           passedChecksumCount = newPassedChecksum;
         }
-
-//        M5.Lcd.setCursor(0, 0);
 
         populateLatestLemonTelemetry(latestLemonTelemetry, gps);
 
@@ -1084,7 +1061,7 @@ char uplink_preamble_second_segment[] = "AEJ";
     }
     else
     {
-      if (accumulateMissedMessageCount)
+      if (accumulateMissedMessageCount && nofix_byte_loop_count == -1)  // (must be at least 10 seconds since power on and first fix received)
         uplinkMessageMissingCount++;
     }
   }
