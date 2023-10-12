@@ -198,7 +198,7 @@ Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
 void updateButtonsAndBuzzer();
 
-const float minimumUSBVoltage = 2.0;
+const float minimumUSBVoltage = 4.6;
 long USBVoltageDropTime = 0;
 long milliSecondsToWaitForShutDown = 1500;
 
@@ -556,7 +556,7 @@ void setup()
   p_primaryButton = &M5.BtnA;
   p_secondButton = &M5.BtnB;
 
-  delay(5000);
+  delay(500);
 
   // if there is an infinite restart loop after connecting to wifi this will allow
   // for shutdown once the power is pulled. Otherwise it will continue on the battery power.
