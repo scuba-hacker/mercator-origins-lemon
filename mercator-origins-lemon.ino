@@ -175,6 +175,7 @@ uint32_t badUplinkMessageCount = 0;
 uint32_t badLengthUplinkMsgCount = 0;
 uint32_t badChkSumUplinkMsgCount = 0;
 uint16_t uplinkMessageMissingCount = 0;
+float uplinkBadMessagePercentage = 0.0;
 
 uint32_t lastGoodUplinkMessage = 0;
 uint16_t uplinkMessageLength = 0;
@@ -182,6 +183,9 @@ uint32_t qubitroUploadCount = 0;
 uint16_t qubitroMessageLength = 0;
 float KBToQubitro = 0.0;
 float KBFromMako = 0.0;
+
+bool accumulateMissedMessageCount = false;    // start-up
+const uint32_t delayBeforeCountingMissedMessages = 10000; // Allow 10 second start-up
 
 const uint32_t uplinkMessageLingerPeriodMs = 300;
 uint32_t uplinkLingerTimeoutAt = 0;
@@ -303,7 +307,7 @@ struct LemonTelemetryForStorage
   float     imu_rot_acc_x;
   float     imu_rot_acc_y;
   float     imu_rot_acc_z;
-  float     imu_temperature;      // 92
+  float     uplinkBadMessagePercentage;      // 92
 
   float     KBFromMako;               
   uint8_t   gps_hour;
@@ -334,6 +338,8 @@ struct LemonTelemetryForJson
   float     vBatVoltage;
   uint32_t  uplinkMessageMissingCount;
   uint16_t  uplinkMessageLength;
+  float     uplinkBadMessagePercentage;
+
   double    gps_hdop;
   double    gps_course_deg;
   double    gps_knots;
@@ -347,7 +353,6 @@ struct LemonTelemetryForJson
   float     imu_rot_acc_x;
   float     imu_rot_acc_y;
   float     imu_rot_acc_z;
-  float     imu_temperature;
 
   float     KBFromMako;
   uint8_t   gps_hour;
@@ -377,14 +382,12 @@ void getM5ImuSensorData(struct LemonTelemetryForJson& t)
     M5.IMU.getGyroData(&t.imu_gyro_x, &t.imu_gyro_y, &t.imu_gyro_z);
     M5.IMU.getAccelData(&t.imu_lin_acc_x, &t.imu_lin_acc_y, &t.imu_lin_acc_z);
     M5.IMU.getAhrsData(&t.imu_rot_acc_x, &t.imu_rot_acc_y, &t.imu_rot_acc_z);
-    M5.IMU.getTempData(&t.imu_temperature);
   }
   else
   {
     t.imu_gyro_x = t.imu_gyro_y = t.imu_gyro_z = uninitialisedIMU;
     t.imu_lin_acc_x = t.imu_lin_acc_y = t.imu_lin_acc_z = uninitialisedIMU;
     t.imu_rot_acc_x = t.imu_rot_acc_y = t.imu_rot_acc_z = uninitialisedIMU;
-    t.imu_temperature = uninitialisedIMU;
   }
 }
 
@@ -721,6 +724,9 @@ void loop()
 {
   shutdownIfUSBPowerOff();
 
+  if (!accumulateMissedMessageCount && millis() > delayBeforeCountingMissedMessages)
+    accumulateMissedMessageCount = true;
+
   checkConnectivity();
   
   if (p_primaryButton->wasReleasefor(100)) // toggle ota only
@@ -884,22 +890,6 @@ void loop()
   {
     if (processUplinkMessage)
     {
-      /*
-      M5.Lcd.setTextSize(1);
-
-      char temp[10];
-      memset(temp,0,10);
-      strncpy(temp, gps.getSentence(),7);
-
-      tb_display_print_String(temp);
-      processUplinkMessage = false;
-      
-      gps.location.lat(); // force update flag to be reset.
-
-      return;
-      */
-
-
       // 1. Skip past any trash characters due to half-duplex and read pre-amble
       // If uplink messages to be ignored this returns false, which will zero out the Mako telemetry in upload message.
       bool validPreambleFound = checkForValidPreambleOnUplink();
@@ -915,6 +905,12 @@ void loop()
       // 3. Populate the head block with the binary telemetry data received from Mako (or zero's if no data)
       bool messageValidatedOk = populateHeadWithMakoTelemetry(headBlock, validPreambleFound);
 
+
+      float tempDenominator = float(goodUplinkMessageCount+badUplinkMessageCount+uplinkMessageMissingCount);
+
+      if (tempDenominator > 0)
+        uplinkBadMessagePercentage = 100.0*float(badUplinkMessageCount+uplinkMessageMissingCount)/tempDenominator;
+      
       M5.Lcd.setCursor(5, 5);
       M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
           
@@ -936,19 +932,25 @@ void loop()
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
 
-      const bool showPipeLength=true;
+      const bool showPipeLength=false;
       
       if (showPipeLength)
         M5.Lcd.printf("P %-3hu Mis %hu\n",telemetryPipeline.getPipelineLength(),uplinkMessageMissingCount);
       else
-        M5.Lcd.printf("^%-3hu Mis %hu\n",badLengthUplinkMsgCount,uplinkMessageMissingCount);
+        M5.Lcd.printf("L%-3hu Mis %hu\n",badLengthUplinkMsgCount,uplinkMessageMissingCount);
 
       if (WiFi.status() != WL_CONNECTED)
         M5.Lcd.setTextColor(TFT_WHITE, TFT_RED);
       else
         M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-        
-      M5.Lcd.printf("Q %lu UT %lu  \n",qubitroUploadCount,uplinkMessageListenTimer);
+
+      const bool showListenTimer = false;
+
+      if (showListenTimer)       
+        M5.Lcd.printf("Q %lu UT %lu  \n",qubitroUploadCount,uplinkMessageListenTimer);
+      else
+        M5.Lcd.printf("Q %lu !%.1f%%\n",qubitroUploadCount,uplinkBadMessagePercentage);
+      
       M5.Lcd.setTextSize(2);
 
       if (WiFi.status() != WL_CONNECTED) 
@@ -1082,7 +1084,8 @@ char uplink_preamble_second_segment[] = "AEJ";
     }
     else
     {
-      uplinkMessageMissingCount++;
+      if (accumulateMissedMessageCount)
+        uplinkMessageMissingCount++;
     }
   }
   else
@@ -1411,7 +1414,7 @@ void constructLemonTelemetryForStorage(struct LemonTelemetryForStorage& s, const
   s.imu_gyro_x = l.imu_gyro_x; s.imu_gyro_y = l.imu_gyro_y; s.imu_gyro_z = l.imu_gyro_z; 
   s.imu_lin_acc_x = l.imu_lin_acc_x; s.imu_lin_acc_y = l.imu_lin_acc_y; s.imu_lin_acc_z = l.imu_lin_acc_z;
   s.imu_rot_acc_x = l.imu_rot_acc_x; s.imu_rot_acc_y = l.imu_rot_acc_y; s.imu_rot_acc_z = l.imu_rot_acc_z;
-  s.imu_temperature = l.imu_temperature;      // 88
+  s.uplinkBadMessagePercentage = uplinkBadMessagePercentage;      // 88
 
   s.KBFromMako = KBFromMako;                             // GLOBAL
   s.gps_hour = l.gps_hour; s.gps_minute = l.gps_minute;  s.gps_second = l.gps_second;
@@ -1505,7 +1508,7 @@ bool decodeIntoLemonTelemetryForUpload(uint8_t* msg, const uint16_t length, stru
   l.imu_rot_acc_x = decode_float(msg);
   l.imu_rot_acc_y = decode_float(msg);
   l.imu_rot_acc_z = decode_float(msg);
-  l.imu_temperature = decode_float(msg);   // 88
+  l.uplinkBadMessagePercentage = decode_float(msg);   // 88
 
   l.KBFromMako = decode_float(msg);
   l.gps_hour = decode_uint8(msg);
@@ -1981,7 +1984,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           "\"lemon_imu_gyro_x\":%f,\"lemon_imu_gyro_y\":%f,\"lemon_imu_gyro_z\":%f,"
           "\"lemon_imu_lin_acc_x\":%f,\"lemon_imu_lin_acc_y\":%f,\"lemon_imu_lin_acc_z\":%f,"
           "\"lemon_imu_rot_acc_x\":%f,\"lemon_imu_rot_acc_y\":%f,\"lemon_imu_rot_acc_z\":%f,"
-          "\"lemon_imu_temperature\":%f,"
+          "\"uplink_bad_percentage\":%.1f,"
 
           "\"mako_waymarker_e\":%d,\"mako_waymarker_label\":\"%s\",\"mako_direction_metric\":\"%s\","
 
@@ -2022,7 +2025,7 @@ void buildUplinkTelemetryMessageV6a(char* payload, const struct MakoUplinkTeleme
           l.imu_gyro_x,    l.imu_gyro_y,    l.imu_gyro_z,
           l.imu_lin_acc_x, l.imu_lin_acc_y, l.imu_lin_acc_z,
           l.imu_rot_acc_x, l.imu_rot_acc_y, l.imu_rot_acc_z,
-          l.imu_temperature,
+          l.uplinkBadMessagePercentage,
 
           m.way_marker_enum, m.way_marker_label, m.direction_metric,
           
