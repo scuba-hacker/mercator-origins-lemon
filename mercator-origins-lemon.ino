@@ -1849,6 +1849,7 @@ bool setupOTAWebServer(const char* _ssid, const char* _password, const char* lab
       request->send(200, "text/plain", "To upload firmware use /update");
     });
 
+    AsyncElegantOTA.setID("Lemon");
     AsyncElegantOTA.begin(&asyncWebServer);    // Start AsyncElegantOTA
     asyncWebServer.begin();
 
