@@ -573,11 +573,11 @@ void setup()
       if (!wifiConnected)
       {
         shutdownIfUSBPowerOff();
-        wifiConnected = setupOTAWebServer(ssid_1, password_1, label_1, timeout_1);
+        wifiConnected = setupOTAWebServer(ssid_2, password_2, label_2, timeout_2);
         if (!wifiConnected)
         {
           shutdownIfUSBPowerOff();
-          wifiConnected = setupOTAWebServer(ssid_1, password_1, label_1, timeout_1);
+          wifiConnected = setupOTAWebServer(ssid_3, password_3, label_3, timeout_3);
         }
       }
     }
