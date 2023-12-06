@@ -199,7 +199,7 @@ Button* p_primaryButton = NULL;
 Button* p_secondButton = NULL;
 void updateButtonsAndBuzzer();
 
-const float minimumUSBVoltage = 2.0;
+const float minimumUSBVoltage = 4.0;
 long USBVoltageDropTime = 0;
 long milliSecondsToWaitForShutDown = 1500;
 
